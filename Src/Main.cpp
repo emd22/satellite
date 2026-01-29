@@ -11,7 +11,11 @@
 
 #include "SGP4.h"
 #include "raylib.h"
+#include "raymath.h"
 #include "rlgl.h"
+
+#define RLIGHTS_IMPLEMENTATION
+#include "rlights.h"
 
 
 class Vec3r
@@ -134,10 +138,10 @@ std::vector<Vector3> LoadPositions()
 
     while (fb) {
         fb.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
-        positions.emplace_back(Vector3 {
-            .x = static_cast<float>(buffer[0] * 0.1),
-            .y = static_cast<float>(buffer[1] * 0.1),
-            .z = static_cast<float>(buffer[2] * 0.1),
+        positions.push_back(Vector3 {
+            .x = static_cast<float>(buffer[0] * 0.01),
+            .y = static_cast<float>(buffer[1] * 0.01),
+            .z = static_cast<float>(buffer[2] * 0.01),
         });
     }
 
@@ -162,7 +166,9 @@ int main()
 
     InitWindow(1024, 720, "Space");
 
-    SetTargetFPS(60);
+
+    Mesh sphere = GenMeshSphere(0.1f, 16.0f, 16.0f);
+
 
     Camera camera {};
     camera.position = Vector3 { 50.0f, 0.0f, -50.0f };
@@ -170,50 +176,88 @@ int main()
     camera.up = Vector3 { 0.0f, 1.0f, 0.0f };
     camera.fovy = 75.0f;
     camera.projection = CAMERA_PERSPECTIVE;
+    rlSetClipPlanes(50.0f, 8000.0f);
 
-    Model model = LoadModel("../earth.glb");
 
-    // Vec3r sat_pos_scaled = force.Position * 0.1;
-    // sat_pos_scaled.Print();
+    Model model = LoadModel("../Earth.glb");
 
-    // Vector3 sat_position = Vector3 { .x = float(sat_pos_scaled.X),
-    //                                  .y = float(sat_pos_scaled.Y),
-    //                                  .z = float(sat_pos_scaled.Z) };
+    Matrix* transforms = (Matrix*)RL_CALLOC(positions.size(), sizeof(Matrix));
+
+    for (int i = 0; i < positions.size(); i++) {
+        Vector3& pos = positions[i];
+        // printf("Position: {%f, %f, %f}\n", pos.x, pos.y, pos.z);
+        transforms[i] = MatrixTranslate(pos.x, pos.y, pos.z);
+    }
+
+    // Load lighting shader
+    Shader shader = LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
+    // Get shader locations
+    shader.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(shader, "mvp");
+    shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(shader, "viewPos");
+    shader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(shader, "instanceTransform");
+
+    // Set shader value: ambient light level
+    int ambientLoc = GetShaderLocation(shader, "ambient");
+    SetShaderValue(shader, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, SHADER_UNIFORM_VEC4);
+
+    // Create one light
+    CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 205, 200, 150 }, shader);
+
+    // NOTE: We are assigning the intancing shader to material.shader
+    // to be used on mesh drawing with DrawMeshInstanced()
+    Material matInstances = LoadMaterialDefault();
+    matInstances.shader = shader;
+    matInstances.maps[MATERIAL_MAP_DIFFUSE].color = RAYWHITE;
+
 
     double counter = 0.0f;
 
+    SetTargetFPS(60);
+
+
     while (!WindowShouldClose()) {
+        camera.position.x = cosf(counter) * 200.0f;
+        camera.position.z = sinf(counter) * 200.0f;
+
+        UpdateCamera(&camera, CAMERA_ORBITAL);
+        // Update the light shader with the camera view position
+        float cameraPos[3] = { camera.position.x, camera.position.y, camera.position.z };
+        SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], cameraPos, SHADER_UNIFORM_VEC3);
+        //----------------------------------------------------------------------------------
+
+
         BeginDrawing();
-        ClearBackground(RAYWHITE);
+
+        ClearBackground(BLACK);
+
         BeginMode3D(camera);
 
-        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.1f, WHITE);
 
-        camera.position.x = cosf(counter * 0.1) * 200.0f;
-        camera.position.z = sinf(counter * 0.1) * 200.0f;
+        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.01f, WHITE);
+        DrawMeshInstanced(sphere, matInstances, transforms, positions.size());
 
-        for (int i = 0; i < positions.size(); i++) {
-            DrawSphere(positions[i], 4.0f, RED);
-        }
+
+        // for (int i = 0; i < positions.size(); i++) {
+        //     DrawSphere(positions[i], 4.0f, RED);
+        // }
+        //
 
         EndMode3D();
-
-        // rlPushMatrix();
 
 
         // rlPopMatrix();
 
         EndDrawing();
 
-        counter += 0.1f;
+        counter += 0.001f;
     }
+
+    RL_FREE(transforms);
 
     UnloadModel(model);
 
     CloseWindow();
 
-
-    return 0;
 
     return 0;
 }
