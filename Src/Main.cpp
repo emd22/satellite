@@ -171,12 +171,12 @@ int main()
 
 
     Camera camera {};
-    camera.position = Vector3 { 50.0f, 0.0f, -50.0f };
+    camera.position = Vector3 { 100.0f, 0.0f, -100.0f };
     camera.target = Vector3 { 0.0f, 0.0f, 0.0f };
     camera.up = Vector3 { 0.0f, 1.0f, 0.0f };
     camera.fovy = 75.0f;
     camera.projection = CAMERA_PERSPECTIVE;
-    rlSetClipPlanes(50.0f, 8000.0f);
+    rlSetClipPlanes(0.05f, 2000.0f);
 
 
     Model model = LoadModel("../Earth.glb");
@@ -214,17 +214,24 @@ int main()
 
     SetTargetFPS(60);
 
+    float current_zoom = 200.0f;
+
 
     while (!WindowShouldClose()) {
-        camera.position.x = cosf(counter) * 200.0f;
-        camera.position.z = sinf(counter) * 200.0f;
+        camera.position.x = cosf(counter) * current_zoom;
+        camera.position.z = sinf(counter) * current_zoom;
 
-        UpdateCamera(&camera, CAMERA_ORBITAL);
+        // UpdateCamera(&camera, CAMERA_ORBITAL);
+
         // Update the light shader with the camera view position
         float cameraPos[3] = { camera.position.x, camera.position.y, camera.position.z };
         SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], cameraPos, SHADER_UNIFORM_VEC3);
         //----------------------------------------------------------------------------------
 
+        float zoom_movement = GetMouseWheelMove();
+        if (abs(zoom_movement) > 0.005f) {
+            current_zoom += zoom_movement * 0.5;
+        }
 
         BeginDrawing();
 
@@ -233,7 +240,7 @@ int main()
         BeginMode3D(camera);
 
 
-        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.01f, WHITE);
+        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.12f, WHITE);
         DrawMeshInstanced(sphere, matInstances, transforms, positions.size());
 
 
@@ -249,7 +256,7 @@ int main()
 
         EndDrawing();
 
-        counter += 0.001f;
+        counter += 0.0005f;
     }
 
     RL_FREE(transforms);
