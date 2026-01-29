@@ -17,6 +17,11 @@
 #define RLIGHTS_IMPLEMENTATION
 #include "rlights.h"
 
+// Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
+// Earth 3D model has been taken from the NASA website
+
+
+static constexpr float scMouseSensitivity = 0.005f;
 
 class Vec3r
 {
@@ -149,8 +154,12 @@ std::vector<Vector3> LoadPositions()
 }
 
 
-int main()
+int main(int argc, char* argv[])
 {
+    if (argc > 1 && !strcmp(argv[1], "rebuild")) {
+        GeneratePositions();
+    }
+
     std::vector<Vector3> positions = LoadPositions();
 
     char line1[] = "1 41340U 16012D   26026.21998329  .00083066  00000+0  11410-2 0  9992";
@@ -181,6 +190,8 @@ int main()
 
     Model model = LoadModel("../Earth.glb");
 
+    Model skybox = LoadModel("../Skybox.glb");
+
     Matrix* transforms = (Matrix*)RL_CALLOC(positions.size(), sizeof(Matrix));
 
     for (int i = 0; i < positions.size(); i++) {
@@ -198,7 +209,7 @@ int main()
 
     // Set shader value: ambient light level
     int ambientLoc = GetShaderLocation(shader, "ambient");
-    SetShaderValue(shader, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, SHADER_UNIFORM_VEC4);
+    SetShaderValue(shader, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
 
     // Create one light
     CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 205, 200, 150 }, shader);
@@ -210,16 +221,32 @@ int main()
     matInstances.maps[MATERIAL_MAP_DIFFUSE].color = RAYWHITE;
 
 
-    double counter = 0.0f;
+    double angle_x = 0.01;
+    double angle_y = 0.01;
 
     SetTargetFPS(60);
 
-    float current_zoom = 200.0f;
+    constexpr float cDefaultZoom = 200.0f;
+    float current_zoom = cDefaultZoom;
+
+    constexpr float cPoleLimitOffset = 0.005;
 
 
     while (!WindowShouldClose()) {
-        camera.position.x = cosf(counter) * current_zoom;
-        camera.position.z = sinf(counter) * current_zoom;
+        // angle_x = Clamp(angle_x, -M_PI_2 + 0.001, M_PI_2 - 0.001);
+
+        if (angle_x > M_PI) {
+            angle_x = -M_PI + 0.0001;
+        }
+        if (angle_x < -M_PI) {
+            angle_x = M_PI - 0.0001;
+        }
+
+        angle_y = Clamp(angle_y, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
+
+        camera.position.x = current_zoom * cosf(angle_x) * sinf(angle_y);
+        camera.position.y = current_zoom * cosf(angle_y);
+        camera.position.z = current_zoom * sinf(angle_y) * sinf(angle_x);
 
         // UpdateCamera(&camera, CAMERA_ORBITAL);
 
@@ -233,6 +260,15 @@ int main()
             current_zoom += zoom_movement * 0.5;
         }
 
+        if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+            Vector2 mouse_delta = GetMouseDelta();
+
+            if (Vector2LengthSqr(mouse_delta) > 0.05f) {
+                angle_x += mouse_delta.x * scMouseSensitivity;
+                angle_y += mouse_delta.y * scMouseSensitivity;
+            }
+        }
+
         BeginDrawing();
 
         ClearBackground(BLACK);
@@ -240,7 +276,8 @@ int main()
         BeginMode3D(camera);
 
 
-        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.12f, WHITE);
+        DrawModel(skybox, Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (current_zoom / cDefaultZoom), WHITE);
+        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.11f, WHITE);
         DrawMeshInstanced(sphere, matInstances, transforms, positions.size());
 
 
@@ -255,8 +292,6 @@ int main()
         // rlPopMatrix();
 
         EndDrawing();
-
-        counter += 0.0005f;
     }
 
     RL_FREE(transforms);
