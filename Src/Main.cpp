@@ -4,301 +4,287 @@
  * Visualization Project
  */
 
+#include "Dataset.hpp"
+
+#include <cassert>
 #include <cstdlib>
-#include <fstream>
-#include <iostream>
 #include <vector>
 
-#include "SGP4.h"
-#include "raylib.h"
-#include "raymath.h"
-#include "rlgl.h"
+#include "ThirdParty/raylib.h"
+#include "ThirdParty/raymath.h"
+#include "ThirdParty/rlgl.h"
 
 #define RLIGHTS_IMPLEMENTATION
-#include "rlights.h"
+#include "Config.hpp"
+#include "Types.hpp"
+#include "Vec3.hpp"
+
+#include "ThirdParty/rlights.h"
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
 // Earth 3D model has been taken from the NASA website
 
 
-static constexpr float scMouseSensitivity = 0.005f;
+static constexpr float32 scMouseSensitivity = 0.005f;
 
-class Vec3r
-{
-public:
-    static const Vec3r sZero;
+static constexpr float cPoleLimitOffset = 0.005;
+static constexpr float cDefaultZoom = 200.0f;
 
-public:
-    Vec3r(double x, double y, double z) : X(x), Y(y), Z(z) {}
-
-    void Print() { printf("{ %f, %f, %f }\n", X, Y, Z); }
-
-    Vec3r operator*(float multiplier) const { return Vec3r(X * multiplier, Y * multiplier, Z * multiplier); }
-
-public:
-    union
-    {
-        struct
-        {
-            double X;
-            double Y;
-            double Z;
-            double W;
-        };
-
-        double Values[4];
-    };
-};
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
 
-struct SpaceForce
+
+class Simulation
 {
-    Vec3r Position = Vec3r::sZero;
-    Vec3r Velocity = Vec3r::sZero;
+public:
+    Simulation();
+
+    void InitGraphics();
+
+    void CheckControls();
+    void Render();
+
+    void StepNext();
+
+    const std::vector<Vector3>& GetPositionsForTimeFrame();
+
+    ~Simulation();
+
+
+public:
+    Dataset TmpDataset;
+
+    uint32 TimeFrameIndex = 0;
+
+    Model Earth;
+
+    Shader SatLit;
+    Shader EarthLit;
+    Material SatMaterial;
+    Material EarthMaterial;
+
+    Matrix* TransformBuffer;
+
+    float Zoom = cDefaultZoom;
+
+    double AngleX = 0.01;
+    double AngleY = 0.01;
+
+    Camera Camera {};
+    Mesh SatModel;
+    Model Skybox;
+
+    bool bAnimateTimeFrames = false;
+
+    uint64 FrameCount = 0;
 };
 
 
-class Space
+Simulation::Simulation()
 {
-public:
-    void CreateFromEntry(const char* line1, const char* line2);
+    TmpDataset.LoadFromBin("../Positions.bin");
+    InitGraphics();
+}
 
-    SpaceForce GetForce(double time);
+void Simulation::InitGraphics()
+{
+    InitWindow(1024, 720, "Space");
 
 
-public:
-    struct
+    auto& positions = GetPositionsForTimeFrame();
+
+    TransformBuffer = (Matrix*)RL_CALLOC(positions.size(), sizeof(Matrix));
+
+    for (int i = 0; i < positions.size(); i++) {
+        const Vector3& pos = positions[i];
+        TransformBuffer[i] = MatrixTranslate(pos.x, pos.y, pos.z);
+    }
+
+    Earth = LoadModel("../Earth.glb");
+    Skybox = LoadModel("../Skybox.glb");
+    SatModel = GenMeshSphere(0.10f, 6.0f, 6.0f);
+
+
+    { // Load lighting shader
+        SatLit = LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
+        // Get shader locations
+        SatLit.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
+        SatLit.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
+        SatLit.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(SatLit, "instanceTransform");
+
+        // Set shader value: ambient light level
+        int ambientLoc = GetShaderLocation(SatLit, "ambient");
+        SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
+
+        // Create one light
+        CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 230, 200, 150 },
+                    SatLit);
+    }
+
+
+    { // Load lighting shader
+        EarthLit = LoadShader("../Shaders/LightingDefault.vs", "../Shaders/Lighting.fs");
+        // Get shader locations
+        EarthLit.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(EarthLit, "mvp");
+        EarthLit.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(EarthLit, "viewPos");
+        EarthLit.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(EarthLit, "matModel");
+
+        // Set shader value: ambient light level
+        int ambientLoc = GetShaderLocation(EarthLit, "ambient");
+        SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
+
+        // Create one light
+        CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 230, 200, 150 },
+                    EarthLit);
+    }
+
+    // NOTE: We are assigning the intancing shader to material.shader
+    // to be used on mesh drawing with DrawMeshInstanced()
+    SatMaterial = LoadMaterialDefault();
+    SatMaterial.shader = SatLit;
+    SatMaterial.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+
+    Texture2D texture = Earth.materials[1].maps[MATERIAL_MAP_DIFFUSE].texture;
+
+    EarthMaterial = LoadMaterialDefault();
+    EarthMaterial.shader = EarthLit;
+    EarthMaterial.maps[MATERIAL_MAP_DIFFUSE].texture = texture;
+
+    Camera.position = Vector3 { 100.0f, 0.0f, -100.0f };
+    Camera.target = Vector3 { 0.0f, 0.0f, 0.0f };
+    Camera.up = Vector3 { 0.0f, 1.0f, 0.0f };
+    Camera.fovy = 65.0f;
+    Camera.projection = CAMERA_PERSPECTIVE;
+    rlSetClipPlanes(0.05f, 2000.0f);
+
+    // Earth.materials[0].shader = EarthLit;
+    // Earth.materials[1] = LoadMaterialDefault();
+    // Earth.materials[1].shader = EarthLit;
+    // Earth.materials[1].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+
+
+    SetTargetFPS(60);
+}
+
+
+const std::vector<Vector3>& Simulation::GetPositionsForTimeFrame()
+{
+    assert(TimeFrameIndex < TmpDataset.Size());
+    return TmpDataset.GetPositionsForIndex(TimeFrameIndex);
+}
+
+Simulation::~Simulation()
+{
+    RL_FREE(TransformBuffer);
+
+    UnloadModel(Earth);
+    UnloadModel(Skybox);
+
+    CloseWindow();
+}
+
+void Simulation::StepNext()
+{
+    TimeFrameIndex = ((TimeFrameIndex + 1) % scNumTimeCaptures);
+
+    auto& positions = GetPositionsForTimeFrame();
+
+    for (int i = 0; i < positions.size(); i++) {
+        const Vector3& pos = positions[i];
+        TransformBuffer[i] = MatrixTranslate(pos.x, pos.y, pos.z);
+    }
+}
+
+void Simulation::CheckControls()
+{
+    if (IsKeyPressed(KEY_SPACE)) {
+        StepNext();
+    }
+
+    if (IsKeyPressed(KEY_P)) {
+        bAnimateTimeFrames = !bAnimateTimeFrames;
+    }
+}
+
+void Simulation::Render()
+{
+    if (bAnimateTimeFrames && !(FrameCount % 5)) {
+        StepNext();
+    }
+
+    if (AngleX > M_PI) {
+        AngleX = -M_PI + 0.0001;
+    }
+    if (AngleX < -M_PI) {
+        AngleX = M_PI - 0.0001;
+    }
+
+    AngleY = Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
+
+    Camera.position.x = Zoom * cosf(AngleX) * sinf(AngleY);
+    Camera.position.y = Zoom * cosf(AngleY);
+    Camera.position.z = Zoom * sinf(AngleY) * sinf(AngleX);
+
     {
-        double Start;
-        double Stop;
-        double Delta;
-    } Mfe;
-
-    elsetrec SatRec;
-};
-
-void Space::CreateFromEntry(const char* line1, const char* line2)
-{
-    memset(&SatRec, 0, sizeof(SatRec));
-
-    char* line1_buf = strdup(line1);
-    char* line2_buf = strdup(line2);
-
-    SGP4Funcs::twoline2rv(line1_buf, line2_buf, 'c', 'e', 'i', wgs84, Mfe.Start, Mfe.Stop, Mfe.Delta, SatRec);
-
-    free(line1_buf);
-    free(line2_buf);
-}
-
-SpaceForce Space::GetForce(double time)
-{
-    SpaceForce force {};
-    SGP4Funcs::sgp4(SatRec, time, force.Position.Values, force.Velocity.Values);
-
-    return force;
-}
+        float camera_pos[3] = { Camera.position.x, Camera.position.y, Camera.position.z };
+        SetShaderValue(SatLit, SatLit.locs[SHADER_LOC_VECTOR_VIEW], camera_pos, SHADER_UNIFORM_VEC3);
+        SetShaderValue(EarthLit, EarthLit.locs[SHADER_LOC_VECTOR_VIEW], camera_pos, SHADER_UNIFORM_VEC3);
+    }
 
 
-void GeneratePositions()
-{
-    std::string filename = "../NORAD_TLE.txt";
+    float zoom_movement = GetMouseWheelMove();
+    if (abs(zoom_movement) > 0.005f) {
+        Zoom += zoom_movement * 0.5;
+    }
 
-    std::ifstream fb(filename, std::ios::in);
+    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        Vector2 mouse_delta = GetMouseDelta();
 
-    std::string name_line;
-    std::string line1;
-    std::string line2;
-
-    std::ofstream output("../Positions.bin", std::ios::out | std::ios::binary);
-
-
-    while (true) {
-        if (!std::getline(fb, name_line)) {
-            return;
+        if (Vector2LengthSqr(mouse_delta) > 0.05f) {
+            AngleX += mouse_delta.x * scMouseSensitivity;
+            AngleY += mouse_delta.y * scMouseSensitivity;
         }
-        std::getline(fb, line1);
-        std::getline(fb, line2);
-
-        printf("Saving %s\n", name_line.c_str());
-
-        Space space {};
-
-        space.CreateFromEntry(line1.c_str(), line2.c_str());
-        SpaceForce force = space.GetForce(0.0f);
-
-        output.write(reinterpret_cast<char*>(force.Position.Values), sizeof(force.Position.Values));
     }
 
-    output.close();
-}
+    BeginDrawing();
 
-std::vector<Vector3> LoadPositions()
-{
-    std::ifstream fb("../Positions.bin", std::ios::in | std::ios::binary);
+    ClearBackground(BLACK);
 
-    std::vector<Vector3> positions;
+    BeginMode3D(Camera);
 
-    double buffer[4];
 
-    while (fb) {
-        fb.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
-        positions.push_back(Vector3 {
-            .x = static_cast<float>(buffer[0] * 0.01),
-            .y = static_cast<float>(buffer[1] * 0.01),
-            .z = static_cast<float>(buffer[2] * 0.01),
-        });
-    }
+    DrawModel(Skybox, Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), WHITE);
+    // DrawModel(Earth, Vector3 { 0.0f, 0.0f, 0.0f }, 0.065f, WHITE);
+    //
+    Matrix newmat = MatrixScale(0.065, 0.065, 0.065);
+    DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
+    DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, GetPositionsForTimeFrame().size());
 
-    return positions;
+    EndMode3D();
+
+    DrawText(TextFormat("aframe:   %02i/%02i", TimeFrameIndex + 1, TmpDataset.Size()), 10, 10, 20, WHITE);
+    DrawText("dataset: default", 10, 30, 14, WHITE);
+    DrawText(TextFormat("sats:    %04i", TmpDataset.GetPositionsForIndex(0).size()), 10, 45, 14, WHITE);
+
+    EndDrawing();
+
+    ++FrameCount;
 }
 
 
 int main(int argc, char* argv[])
 {
     if (argc > 1 && !strcmp(argv[1], "rebuild")) {
-        GeneratePositions();
+        // GeneratePositions();
+        Dataset::SaveFromTLE("../NORAD_TLE.txt", "../Positions.bin");
     }
 
-    std::vector<Vector3> positions = LoadPositions();
-
-    char line1[] = "1 41340U 16012D   26026.21998329  .00083066  00000+0  11410-2 0  9992";
-    char line2[] = "2 41340  30.9947   3.4457 0004047 308.3989  51.6299 15.55929722548471 ";
-
-    Space space {};
-    space.CreateFromEntry(strdup(line1), strdup(line2));
-
-    SpaceForce force = space.GetForce(0.0f);
-
-    force.Position.Print();
-    force.Velocity.Print();
-
-    InitWindow(1024, 720, "Space");
-
-
-    Mesh sphere = GenMeshSphere(0.1f, 16.0f, 16.0f);
-
-
-    Camera camera {};
-    camera.position = Vector3 { 100.0f, 0.0f, -100.0f };
-    camera.target = Vector3 { 0.0f, 0.0f, 0.0f };
-    camera.up = Vector3 { 0.0f, 1.0f, 0.0f };
-    camera.fovy = 75.0f;
-    camera.projection = CAMERA_PERSPECTIVE;
-    rlSetClipPlanes(0.05f, 2000.0f);
-
-
-    Model model = LoadModel("../Earth.glb");
-
-    Model skybox = LoadModel("../Skybox.glb");
-
-    Matrix* transforms = (Matrix*)RL_CALLOC(positions.size(), sizeof(Matrix));
-
-    for (int i = 0; i < positions.size(); i++) {
-        Vector3& pos = positions[i];
-        // printf("Position: {%f, %f, %f}\n", pos.x, pos.y, pos.z);
-        transforms[i] = MatrixTranslate(pos.x, pos.y, pos.z);
-    }
-
-    // Load lighting shader
-    Shader shader = LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
-    // Get shader locations
-    shader.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(shader, "mvp");
-    shader.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(shader, "viewPos");
-    shader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(shader, "instanceTransform");
-
-    // Set shader value: ambient light level
-    int ambientLoc = GetShaderLocation(shader, "ambient");
-    SetShaderValue(shader, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
-
-    // Create one light
-    CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 205, 200, 150 }, shader);
-
-    // NOTE: We are assigning the intancing shader to material.shader
-    // to be used on mesh drawing with DrawMeshInstanced()
-    Material matInstances = LoadMaterialDefault();
-    matInstances.shader = shader;
-    matInstances.maps[MATERIAL_MAP_DIFFUSE].color = RAYWHITE;
-
-
-    double angle_x = 0.01;
-    double angle_y = 0.01;
-
-    SetTargetFPS(60);
-
-    constexpr float cDefaultZoom = 200.0f;
-    float current_zoom = cDefaultZoom;
-
-    constexpr float cPoleLimitOffset = 0.005;
-
+    Simulation sim {};
 
     while (!WindowShouldClose()) {
-        // angle_x = Clamp(angle_x, -M_PI_2 + 0.001, M_PI_2 - 0.001);
-
-        if (angle_x > M_PI) {
-            angle_x = -M_PI + 0.0001;
-        }
-        if (angle_x < -M_PI) {
-            angle_x = M_PI - 0.0001;
-        }
-
-        angle_y = Clamp(angle_y, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
-
-        camera.position.x = current_zoom * cosf(angle_x) * sinf(angle_y);
-        camera.position.y = current_zoom * cosf(angle_y);
-        camera.position.z = current_zoom * sinf(angle_y) * sinf(angle_x);
-
-        // UpdateCamera(&camera, CAMERA_ORBITAL);
-
-        // Update the light shader with the camera view position
-        float cameraPos[3] = { camera.position.x, camera.position.y, camera.position.z };
-        SetShaderValue(shader, shader.locs[SHADER_LOC_VECTOR_VIEW], cameraPos, SHADER_UNIFORM_VEC3);
-        //----------------------------------------------------------------------------------
-
-        float zoom_movement = GetMouseWheelMove();
-        if (abs(zoom_movement) > 0.005f) {
-            current_zoom += zoom_movement * 0.5;
-        }
-
-        if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-            Vector2 mouse_delta = GetMouseDelta();
-
-            if (Vector2LengthSqr(mouse_delta) > 0.05f) {
-                angle_x += mouse_delta.x * scMouseSensitivity;
-                angle_y += mouse_delta.y * scMouseSensitivity;
-            }
-        }
-
-        BeginDrawing();
-
-        ClearBackground(BLACK);
-
-        BeginMode3D(camera);
-
-
-        DrawModel(skybox, Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (current_zoom / cDefaultZoom), WHITE);
-        DrawModel(model, Vector3 { 0.0f, 0.0f, 0.0f }, 0.11f, WHITE);
-        DrawMeshInstanced(sphere, matInstances, transforms, positions.size());
-
-
-        // for (int i = 0; i < positions.size(); i++) {
-        //     DrawSphere(positions[i], 4.0f, RED);
-        // }
-        //
-
-        EndMode3D();
-
-
-        // rlPopMatrix();
-
-        EndDrawing();
+        sim.CheckControls();
+        sim.Render();
     }
-
-    RL_FREE(transforms);
-
-    UnloadModel(model);
-
-    CloseWindow();
 
 
     return 0;
