@@ -4,8 +4,12 @@
 
 #include <vector>
 
+namespace rl {
 #include "ThirdParty/raylib.h"
 #include "ThirdParty/raymath.h"
+} // namespace rl
+
+class String;
 
 struct Force
 {
@@ -15,19 +19,19 @@ struct Force
 
 struct TimeFrame
 {
-    std::vector<Vector3> Positions;
+    std::vector<rl::Vector3> Positions;
     uint32 CurrentStep = 0;
 };
 
 class Dataset
 {
 public:
-    static void SaveFromTLE(const char* tle_path, const char* dst_path);
-    void LoadFromBin(const char* bin_path);
+    static void SaveFromTLE(const String& tle_path, const String& dst_path);
+    void LoadFromBin(const String& bin_path);
 
     inline uint32 Size() const { return TimeFrames.size(); }
 
-    const std::vector<Vector3>& GetPositionsForIndex(uint32 index) const { return TimeFrames[index].Positions; }
+    const std::vector<rl::Vector3>& GetPositionsForIndex(uint32 index) const { return TimeFrames[index].Positions; }
 
 
 public:

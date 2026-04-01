@@ -1,6 +1,7 @@
 #include "Dataset.hpp"
 
 #include "Config.hpp"
+#include "String.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -55,17 +56,15 @@ struct BinHeader
 };
 
 
-void Dataset::SaveFromTLE(const char* tle_path, const char* dst_path)
+void Dataset::SaveFromTLE(const String& tle_path, const String& dst_path)
 {
-    std::string filename = tle_path;
-
-    std::ifstream fb(filename, std::ios::in);
+    std::ifstream fb(tle_path.CStr(), std::ios::in);
 
     std::string name_line;
     std::string line1;
     std::string line2;
 
-    std::ofstream output(dst_path, std::ios::out | std::ios::binary);
+    std::ofstream output(dst_path.CStr(), std::ios::out | std::ios::binary);
 
     BinHeader header {};
     output.write(reinterpret_cast<char*>(&header), sizeof(BinHeader));
@@ -96,9 +95,9 @@ void Dataset::SaveFromTLE(const char* tle_path, const char* dst_path)
 }
 
 
-void Dataset::LoadFromBin(const char* bin_path)
+void Dataset::LoadFromBin(const String& bin_path)
 {
-    std::ifstream fb(bin_path, std::ios::in | std::ios::binary);
+    std::ifstream fb(bin_path.CStr(), std::ios::in | std::ios::binary);
 
     BinHeader header;
     fb.read(reinterpret_cast<char*>(&header), sizeof(BinHeader));
@@ -116,7 +115,7 @@ void Dataset::LoadFromBin(const char* bin_path)
 
             fb.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
 
-            frame.Positions.push_back(Vector3 {
+            frame.Positions.push_back(rl::Vector3 {
                 .x = static_cast<float32>(buffer[0] * cScaleMultiplier),
                 .y = static_cast<float32>(buffer[1] * cScaleMultiplier),
                 .z = static_cast<float32>(buffer[2] * cScaleMultiplier),

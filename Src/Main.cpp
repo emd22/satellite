@@ -10,16 +10,22 @@
 #include <cstdlib>
 #include <vector>
 
+namespace rl {
+
 #include "ThirdParty/raylib.h"
 #include "ThirdParty/raymath.h"
 #include "ThirdParty/rlgl.h"
 
 #define RLIGHTS_IMPLEMENTATION
+#include "ThirdParty/rlights.h"
+
+} // namespace rl
+
 #include "Config.hpp"
+#include "String.hpp"
 #include "Types.hpp"
 #include "Vec3.hpp"
 
-#include "ThirdParty/rlights.h"
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
 // Earth 3D model has been taken from the NASA website
@@ -46,7 +52,7 @@ public:
 
     void StepNext();
 
-    const std::vector<Vector3>& GetPositionsForTimeFrame();
+    const std::vector<rl::Vector3>& GetPositionsForTimeFrame();
 
     ~Simulation();
 
@@ -56,23 +62,23 @@ public:
 
     uint32 TimeFrameIndex = 0;
 
-    Model Earth;
+    rl::Model Earth;
 
-    Shader SatLit;
-    Shader EarthLit;
-    Material SatMaterial;
-    Material EarthMaterial;
+    rl::Shader SatLit;
+    rl::Shader EarthLit;
+    rl::Material SatMaterial;
+    rl::Material EarthMaterial;
 
-    Matrix* TransformBuffer;
+    rl::Matrix* TransformBuffer;
 
     float Zoom = cDefaultZoom;
 
     double AngleX = 0.01;
     double AngleY = 0.01;
 
-    Camera Camera {};
-    Mesh SatModel;
-    Model Skybox;
+    rl::Camera Camera {};
+    rl::Mesh SatModel;
+    rl::Model Skybox;
 
     bool bAnimateTimeFrames = false;
 
@@ -88,74 +94,74 @@ Simulation::Simulation()
 
 void Simulation::InitGraphics()
 {
-    InitWindow(1024, 720, "Space");
+    rl::InitWindow(1024, 720, "Space");
 
 
     auto& positions = GetPositionsForTimeFrame();
 
-    TransformBuffer = (Matrix*)RL_CALLOC(positions.size(), sizeof(Matrix));
+    TransformBuffer = (rl::Matrix*)RL_CALLOC(positions.size(), sizeof(rl::Matrix));
 
     for (int i = 0; i < positions.size(); i++) {
-        const Vector3& pos = positions[i];
-        TransformBuffer[i] = MatrixTranslate(pos.x, pos.y, pos.z);
+        const rl::Vector3& pos = positions[i];
+        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
     }
 
-    Earth = LoadModel("../Earth.glb");
-    Skybox = LoadModel("../Skybox.glb");
-    SatModel = GenMeshSphere(0.10f, 6.0f, 6.0f);
+    Earth = rl::LoadModel("../Earth.glb");
+    Skybox = rl::LoadModel("../Skybox.glb");
+    SatModel = rl::GenMeshSphere(0.10f, 6.0f, 6.0f);
 
 
     { // Load lighting shader
-        SatLit = LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
+        SatLit = rl::LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
         // Get shader locations
-        SatLit.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
-        SatLit.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
-        SatLit.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(SatLit, "instanceTransform");
+        SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
+        SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
+        SatLit.locs[rl::SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(SatLit, "instanceTransform");
 
         // Set shader value: ambient light level
         int ambientLoc = GetShaderLocation(SatLit, "ambient");
-        SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 230, 200, 150 },
-                    SatLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 1000.0f, 100.0f, 0.0f }, rl::Vector3Zero(),
+                        rl::Color { 230, 200, 150 }, SatLit);
     }
 
 
     { // Load lighting shader
-        EarthLit = LoadShader("../Shaders/LightingDefault.vs", "../Shaders/Lighting.fs");
+        EarthLit = rl::LoadShader("../Shaders/LightingDefault.vs", "../Shaders/Lighting.fs");
         // Get shader locations
-        EarthLit.locs[SHADER_LOC_MATRIX_MVP] = GetShaderLocation(EarthLit, "mvp");
-        EarthLit.locs[SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(EarthLit, "viewPos");
-        EarthLit.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(EarthLit, "matModel");
+        EarthLit.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(EarthLit, "mvp");
+        EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(EarthLit, "viewPos");
+        EarthLit.locs[rl::SHADER_LOC_MATRIX_MODEL] = rl::GetShaderLocationAttrib(EarthLit, "matModel");
 
         // Set shader value: ambient light level
-        int ambientLoc = GetShaderLocation(EarthLit, "ambient");
-        SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, SHADER_UNIFORM_VEC4);
+        int ambientLoc = rl::GetShaderLocation(EarthLit, "ambient");
+        rl::SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        CreateLight(LIGHT_DIRECTIONAL, (Vector3) { 1000.0f, 100.0f, 0.0f }, Vector3Zero(), Color { 230, 200, 150 },
-                    EarthLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 1000.0f, 100.0f, 0.0f }, rl::Vector3Zero(),
+                        rl::Color { 230, 200, 150 }, EarthLit);
     }
 
     // NOTE: We are assigning the intancing shader to material.shader
     // to be used on mesh drawing with DrawMeshInstanced()
-    SatMaterial = LoadMaterialDefault();
+    SatMaterial = rl::LoadMaterialDefault();
     SatMaterial.shader = SatLit;
-    SatMaterial.maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
+    SatMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::WHITE;
 
-    Texture2D texture = Earth.materials[1].maps[MATERIAL_MAP_DIFFUSE].texture;
+    rl::Texture2D texture = Earth.materials[1].maps[rl::MATERIAL_MAP_DIFFUSE].texture;
 
-    EarthMaterial = LoadMaterialDefault();
+    EarthMaterial = rl::LoadMaterialDefault();
     EarthMaterial.shader = EarthLit;
-    EarthMaterial.maps[MATERIAL_MAP_DIFFUSE].texture = texture;
+    EarthMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].texture = texture;
 
-    Camera.position = Vector3 { 100.0f, 0.0f, -100.0f };
-    Camera.target = Vector3 { 0.0f, 0.0f, 0.0f };
-    Camera.up = Vector3 { 0.0f, 1.0f, 0.0f };
+    Camera.position = rl::Vector3 { 100.0f, 0.0f, -100.0f };
+    Camera.target = rl::Vector3 { 0.0f, 0.0f, 0.0f };
+    Camera.up = rl::Vector3 { 0.0f, 1.0f, 0.0f };
     Camera.fovy = 65.0f;
-    Camera.projection = CAMERA_PERSPECTIVE;
-    rlSetClipPlanes(0.05f, 2000.0f);
+    Camera.projection = rl::CAMERA_PERSPECTIVE;
+    rl::rlSetClipPlanes(0.05f, 2000.0f);
 
     // Earth.materials[0].shader = EarthLit;
     // Earth.materials[1] = LoadMaterialDefault();
@@ -163,11 +169,11 @@ void Simulation::InitGraphics()
     // Earth.materials[1].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
 
 
-    SetTargetFPS(60);
+    rl::SetTargetFPS(60);
 }
 
 
-const std::vector<Vector3>& Simulation::GetPositionsForTimeFrame()
+const std::vector<rl::Vector3>& Simulation::GetPositionsForTimeFrame()
 {
     assert(TimeFrameIndex < TmpDataset.Size());
     return TmpDataset.GetPositionsForIndex(TimeFrameIndex);
@@ -177,10 +183,10 @@ Simulation::~Simulation()
 {
     RL_FREE(TransformBuffer);
 
-    UnloadModel(Earth);
-    UnloadModel(Skybox);
+    rl::UnloadModel(Earth);
+    rl::UnloadModel(Skybox);
 
-    CloseWindow();
+    rl::CloseWindow();
 }
 
 void Simulation::StepNext()
@@ -190,18 +196,18 @@ void Simulation::StepNext()
     auto& positions = GetPositionsForTimeFrame();
 
     for (int i = 0; i < positions.size(); i++) {
-        const Vector3& pos = positions[i];
-        TransformBuffer[i] = MatrixTranslate(pos.x, pos.y, pos.z);
+        const rl::Vector3& pos = positions[i];
+        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
     }
 }
 
 void Simulation::CheckControls()
 {
-    if (IsKeyPressed(KEY_SPACE)) {
+    if (rl::IsKeyPressed(rl::KEY_SPACE)) {
         StepNext();
     }
 
-    if (IsKeyPressed(KEY_P)) {
+    if (rl::IsKeyPressed(rl::KEY_P)) {
         bAnimateTimeFrames = !bAnimateTimeFrames;
     }
 }
@@ -219,7 +225,7 @@ void Simulation::Render()
         AngleX = M_PI - 0.0001;
     }
 
-    AngleY = Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
+    AngleY = rl::Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
 
     Camera.position.x = Zoom * cosf(AngleX) * sinf(AngleY);
     Camera.position.y = Zoom * cosf(AngleY);
@@ -227,46 +233,46 @@ void Simulation::Render()
 
     {
         float camera_pos[3] = { Camera.position.x, Camera.position.y, Camera.position.z };
-        SetShaderValue(SatLit, SatLit.locs[SHADER_LOC_VECTOR_VIEW], camera_pos, SHADER_UNIFORM_VEC3);
-        SetShaderValue(EarthLit, EarthLit.locs[SHADER_LOC_VECTOR_VIEW], camera_pos, SHADER_UNIFORM_VEC3);
+        rl::SetShaderValue(SatLit, SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW], camera_pos, rl::SHADER_UNIFORM_VEC3);
+        rl::SetShaderValue(EarthLit, EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW], camera_pos, rl::SHADER_UNIFORM_VEC3);
     }
 
 
-    float zoom_movement = GetMouseWheelMove();
+    float zoom_movement = rl::GetMouseWheelMove();
     if (abs(zoom_movement) > 0.005f) {
         Zoom += zoom_movement * 0.5;
     }
 
-    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-        Vector2 mouse_delta = GetMouseDelta();
+    if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
+        rl::Vector2 mouse_delta = rl::GetMouseDelta();
 
-        if (Vector2LengthSqr(mouse_delta) > 0.05f) {
+        if (rl::Vector2LengthSqr(mouse_delta) > 0.05f) {
             AngleX += mouse_delta.x * scMouseSensitivity;
             AngleY += mouse_delta.y * scMouseSensitivity;
         }
     }
 
-    BeginDrawing();
+    rl::BeginDrawing();
 
-    ClearBackground(BLACK);
+    rl::ClearBackground(rl::BLACK);
 
-    BeginMode3D(Camera);
+    rl::BeginMode3D(Camera);
 
 
-    DrawModel(Skybox, Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), WHITE);
+    rl::DrawModel(Skybox, rl::Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), rl::WHITE);
     // DrawModel(Earth, Vector3 { 0.0f, 0.0f, 0.0f }, 0.065f, WHITE);
     //
-    Matrix newmat = MatrixScale(0.065, 0.065, 0.065);
-    DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
-    DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, GetPositionsForTimeFrame().size());
+    rl::Matrix newmat = rl::MatrixScale(0.065, 0.065, 0.065);
+    rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
+    rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, GetPositionsForTimeFrame().size());
 
-    EndMode3D();
+    rl::EndMode3D();
 
-    DrawText(TextFormat("aframe:   %02i/%02i", TimeFrameIndex + 1, TmpDataset.Size()), 10, 10, 20, WHITE);
-    DrawText("dataset: default", 10, 30, 14, WHITE);
-    DrawText(TextFormat("sats:    %04i", TmpDataset.GetPositionsForIndex(0).size()), 10, 45, 14, WHITE);
+    rl::DrawText(rl::TextFormat("aframe:   %02i/%02i", TimeFrameIndex + 1, TmpDataset.Size()), 10, 10, 20, rl::WHITE);
+    rl::DrawText("dataset: default", 10, 30, 14, rl::WHITE);
+    rl::DrawText(rl::TextFormat("sats:    %04i", TmpDataset.GetPositionsForIndex(0).size()), 10, 45, 14, rl::WHITE);
 
-    EndDrawing();
+    rl::EndDrawing();
 
     ++FrameCount;
 }
@@ -281,7 +287,7 @@ int main(int argc, char* argv[])
 
     Simulation sim {};
 
-    while (!WindowShouldClose()) {
+    while (!rl::WindowShouldClose()) {
         sim.CheckControls();
         sim.Render();
     }
