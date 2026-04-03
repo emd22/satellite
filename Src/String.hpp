@@ -16,9 +16,18 @@ class String
 public:
     static String NoCopy(char* ptr, uint32 length);
 
+
+    template <typename... TTypes>
+    static String Fmt(const char* fmt, TTypes&&... args)
+    {
+        return String(std::vformat(fmt, std::make_format_args(args...)));
+    }
+
     String() = default;
     String(uint32 allocation_size);
     String(const char* str, uint32 length);
+    String(const Slice<const char>& slice) { (*this) = String(slice.pData, slice.Size); }
+
     String(const std::string& str);
     String(const char* str);
 

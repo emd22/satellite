@@ -52,7 +52,6 @@ String::String(uint32 allocation_size)
     }
 }
 
-
 String String::operator+(const String& other) const
 {
     // +1 for null terminator

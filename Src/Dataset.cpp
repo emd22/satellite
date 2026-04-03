@@ -66,28 +66,47 @@ struct BinHeader
 };
 
 
-void Dataset::ReadCacheEntry(std::ifstream& stream, Satellite& sat)
+/**
+ * @brief Finds the name of the dataset given a full path
+ */
+static String FindNameForPath(const String& path)
 {
-    // constexpr float cScaleMultiplier = 0.005f;
-    // float64 buffer[4];
+    const char* base = path.CStr();
+    const char* end = base + path.GetLength();
 
-    // stream.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
+    // Find end (eat the file extension)
+    while ((*end) != '.' && end > base) {
+        --end;
+    }
 
-    // sat.AddTimeStep(Satellite::TimeStep {
-    //     .Position {
-    //         .x = static_cast<float32>(buffer[0] * cScaleMultiplier),
-    //         .y = static_cast<float32>(buffer[1] * cScaleMultiplier),
-    //         .z = static_cast<float32>(buffer[2] * cScaleMultiplier),
-    //     },
-    // });
+    const char* idx_ptr = end;
+
+    // Find start, read from back to front until slash is found
+    while ((*idx_ptr) != '/' && end > base) {
+        --idx_ptr;
+    }
+
+    // Remove leading slash
+    ++idx_ptr;
+
+    uint32 size = static_cast<uint32>(end - idx_ptr);
+    String name(size);
+
+    name = String(Slice<const char>(idx_ptr, size));
+
+    return name;
 }
 
 
-void Dataset::LoadFromTLE(const String& tle_path, const String& dst_path)
+void Dataset::LoadFromTLE(const String& tle_path)
 {
     printf("Loading TLE at path %s\n", tle_path.CStr());
 
     std::ifstream fb(tle_path.CStr(), std::ios::in);
+
+    Name = FindNameForPath(tle_path);
+
+    printf("Name: %s\n", Name.CStr());
 
     std::string name_line;
     std::string line1;
@@ -128,8 +147,10 @@ void Dataset::LoadFromTLE(const String& tle_path, const String& dst_path)
 }
 
 
-void Dataset::SaveToBin(const String& dst_path)
+void Dataset::SaveToBin(const String& path)
 {
+    String dst_path = String::Fmt("{}/{}.bin", path, Name);
+
     std::ofstream output(dst_path.CStr(), std::ios::out | std::ios::binary);
 
     BinHeader header {};
@@ -157,6 +178,8 @@ void Dataset::SaveToBin(const String& dst_path)
 void Dataset::LoadFromBin(const String& bin_path)
 {
     std::ifstream fb(bin_path.CStr(), std::ios::in | std::ios::binary);
+
+    Name = FindNameForPath(bin_path);
 
     // Read in the header
     BinHeader header;

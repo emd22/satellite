@@ -52,6 +52,8 @@ public:
     void StepNext();
     void UpdateTransformations();
 
+    void DrawText(const String& text, float32 x, float32 y, float32 size);
+
     ~Simulation();
 
 
@@ -81,6 +83,8 @@ public:
     bool bAnimateTimeFrames = false;
 
     uint64 FrameCount = 0;
+
+    rl::Font Font;
 };
 
 
@@ -92,7 +96,7 @@ void Simulation::InitGraphics()
 
 
     // Load font
-    rl::Font font_ttf = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 64, 0, 250);
+    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 20, 0, 250);
 
     TransformBuffer = (rl::Matrix*)RL_CALLOC(TmpDataset.Size(), sizeof(rl::Matrix));
     UpdateTransformations();
@@ -202,6 +206,11 @@ void Simulation::CheckControls()
     }
 }
 
+void Simulation::DrawText(const String& text, float32 x, float32 y, float32 size)
+{
+    rl::DrawTextEx(Font, text.CStr(), rl::Vector2 { x, y }, float32(size), 2, rl::WHITE);
+}
+
 void Simulation::Render()
 {
     if (bAnimateTimeFrames && !(FrameCount % 5)) {
@@ -250,17 +259,16 @@ void Simulation::Render()
 
 
     rl::DrawModel(Skybox, rl::Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), rl::WHITE);
-    // DrawModel(Earth, Vector3 { 0.0f, 0.0f, 0.0f }, 0.065f, WHITE);
-    //
+
     rl::Matrix newmat = rl::MatrixScale(0.065, 0.065, 0.065);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
     rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
 
     rl::EndMode3D();
 
-    rl::DrawText(rl::TextFormat("aframe:   %02i/%02i", TimeFrameIndex + 1, TmpDataset.Size()), 10, 10, 20, rl::WHITE);
-    rl::DrawText("dataset: default", 10, 30, 14, rl::WHITE);
-    rl::DrawText(rl::TextFormat("sats:    %04i", TmpDataset.Size()), 10, 45, 14, rl::WHITE);
+    DrawText(String::Fmt("AFrame\t{}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 10, 10, 20);
+    DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 10, 30, 14);
+    DrawText(String::Fmt("Satellites\t{}", TmpDataset.Size()), 10, 45, 14);
 
     rl::EndDrawing();
 
@@ -276,14 +284,14 @@ int main(int argc, char* argv[])
         // GeneratePositions();
         printf("Rebuilding satellite cache\n");
 
-        sim.TmpDataset.LoadFromTLE(ASSET_BASE_DIR "/Datasets/NORAD_TLE.txt", ASSET_BASE_DIR "/Cache.bin");
+        sim.TmpDataset.LoadFromTLE(ASSET_BASE_DIR "/Datasets/NORAD_TLE.txt");
         printf("Loaded %d satellites\n", sim.TmpDataset.Size());
 
 
-        sim.TmpDataset.SaveToBin(ASSET_BASE_DIR "/Cache.bin");
+        sim.TmpDataset.SaveToBin(ASSET_BASE_DIR);
     }
     else {
-        sim.TmpDataset.LoadFromBin(ASSET_BASE_DIR "/Cache.bin");
+        sim.TmpDataset.LoadFromBin(ASSET_BASE_DIR "/NORAD_TLE.bin");
     }
 
     sim.InitGraphics();
