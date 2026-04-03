@@ -3,9 +3,11 @@
 #include "Config.hpp"
 #include "Types.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <type_traits>
+
 
 namespace rl {
 #include "ThirdParty/raylib.h"
@@ -51,9 +53,30 @@ public:
         }
     }
 
+    Vec3r(float32 scalar)
+    {
+        if constexpr (std::is_same_v<Real, float64>) {
+            float64 d = static_cast<float64>(scalar);
+            X = d;
+            Y = d;
+            Z = d;
+        }
+        else {
+            X = scalar;
+            Y = scalar;
+            Z = scalar;
+        }
+    }
+
     Vec3r(Real x, Real y, Real z) : X(x), Y(y), Z(z) {}
 
     void Print() { std::printf("{ %f, %f, %f }\n", X, Y, Z); }
+
+    float32 Dot(const Vec3r& other) const { return (X * other.X + Y * other.Y + Z * other.Z); }
+
+    FORCE_INLINE Vec3r operator+(const Vec3r& other) const { return Vec3r(X + other.X, Y + other.Y, Z + other.Z); }
+    FORCE_INLINE Vec3r operator-(const Vec3r& other) const { return Vec3r(X - other.X, Y - other.Y, Z - other.Z); }
+    FORCE_INLINE Vec3r operator/(const Vec3r& other) const { return Vec3r(X / other.X, Y / other.Y, Z / other.Z); }
 
     Vec3r operator*(const Real multiplier) const { return Vec3r(X * multiplier, Y * multiplier, Z * multiplier); }
     Vec3r& operator*=(const Real multiplier)
@@ -73,6 +96,38 @@ public:
         r.z = static_cast<float32>(Z);
 
         return r;
+    }
+
+    float32 Length() const { return sqrt(Dot(*this)); }
+
+    Vec3r Normalize() const { return (*this) / Vec3r(Length()); }
+
+    Vec3r SLerp(const Vec3r& dest, float32 t) const
+    {
+        float dp = Dot(dest);
+        float theta = acosf(dp) * t;
+
+        Vec3r rel_v = (dest - *this * dp).Normalize();
+
+        return ((*this * cosf(theta)) + (rel_v * sinf(theta)));
+    }
+
+
+    FORCE_INLINE Vec3r& LerpIP(const Vec3r& dest, const float step)
+    {
+        X = std::lerp(X, dest.X, step);
+        Y = std::lerp(Y, dest.Y, step);
+        Z = std::lerp(Z, dest.Z, step);
+
+        return *this;
+    }
+
+    FORCE_INLINE Vec3r& SmoothInterpolate(const Vec3r& dest, const float speed, const float delta_time)
+    {
+        LerpIP(dest, 1.0f - std::expf(-speed * delta_time));
+
+        // *this = SLerp(dest, 1.0 - std::expf(-speed * delta_time));
+        return *this;
     }
 
 

@@ -112,7 +112,7 @@ void Dataset::LoadFromTLE(const String& tle_path)
     std::string line1;
     std::string line2;
 
-    constexpr float cScaleMultiplier = 0.005f;
+    constexpr float cScaleMultiplier = 0.0005f;
 
     NumTimesteps = scNumTimeCaptures;
 

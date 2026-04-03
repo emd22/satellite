@@ -25,6 +25,9 @@ namespace rl {
 #include "Types.hpp"
 #include "Vec3.hpp"
 
+/// The number of frames it takes for a satellite to reach its destination.
+static constexpr float32 scNumLerpFrames = 10;
+
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
 // Earth 3D model has been taken from the NASA website
@@ -33,7 +36,7 @@ namespace rl {
 static constexpr float32 scMouseSensitivity = 0.005f;
 
 static constexpr float cPoleLimitOffset = 0.005;
-static constexpr float cDefaultZoom = 200.0f;
+static constexpr float cDefaultZoom = 20.0f;
 
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
@@ -110,8 +113,8 @@ void Simulation::InitGraphics()
     Earth = rl::LoadModel(ASSET_BASE_DIR "/Earth.glb");
     Skybox = rl::LoadModel(ASSET_BASE_DIR "/Skybox.glb");
 
-    SatModel = rl::GenMeshSphere(0.15f, 6.0f, 6.0f);
-    AtmosphereModel = rl::GenMeshSphere(17.0f, 24.0f, 24.0f);
+    SatModel = rl::GenMeshSphere(0.005f, 6.0f, 6.0f);
+    AtmosphereModel = rl::GenMeshSphere(3.0f, 24.0f, 24.0f);
 
 
     { // Load Atmosphere shader
@@ -121,6 +124,7 @@ void Simulation::InitGraphics()
         AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(AtmosphereShader, "mvp");
         AtmosphereShader.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(AtmosphereShader, "viewPos");
         AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MODEL] = rl::GetShaderLocationAttrib(AtmosphereShader, "matModel");
+        AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_VIEW] = rl::GetShaderLocationAttrib(AtmosphereShader, "matView");
 
         // Set shader value: ambient light level
         int ambientLoc = rl::GetShaderLocation(AtmosphereShader, "ambient");
@@ -292,12 +296,17 @@ void Simulation::Render()
 
     rl::DrawModel(Skybox, rl::Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), rl::WHITE);
 
-    rl::Matrix newmat = rl::MatrixScale(0.065, 0.065, 0.065);
+    rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
-    rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
 
-    newmat = rl::MatrixScale(2.0, 2.0, 2.0);
+    rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
+    newmat = rl::MatrixScale(1.0, 1.0, 1.0);
+    // rl::rlDisableBackfaceCulling();
+    rl::BeginBlendMode(rl::BLEND_ADDITIVE);
     rl::DrawMeshInstanced(AtmosphereModel, AtmosphereMaterial, &newmat, 1);
+    rl::EndBlendMode();
+    // rl::rlEnableBackfaceCulling();
+
 
     rl::EndMode3D();
 

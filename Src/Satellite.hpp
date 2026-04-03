@@ -22,5 +22,8 @@ public:
     String Series;
     String Identifier;
 
+    Vec3r CurrentPosition = Vec3r::sZero;
+    Vec3r GoalPosition = Vec3r::sZero;
+
     std::vector<TimeStep> TimeSteps;
 };
