@@ -14,7 +14,6 @@ out vec2 fragTexCoord;
 out vec4 fragColor;
 out vec3 fragNormal;
 
-
 void main()
 {
     fragPosition = vec3(matModel * vec4(vertexPosition, 1.0));

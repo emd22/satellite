@@ -34,7 +34,6 @@ uniform vec3 viewPos;
 
 void main()
 {
-    // Texel color fetching from texture sampler
     vec4 texelColor = texture(texture0, fragTexCoord);
     vec3 lightDot = vec3(0.0);
     vec3 N = normalize(fragNormal);
@@ -63,15 +62,26 @@ void main()
             lightDot += lights[i].color.rgb * NdotL;
 
             float specCo = 0.0;
-            if (NdotL > 0.0) specCo = pow(max(0.0, dot(V, reflect(-(light), N))), 30.0); // 16 refers to shine
+            if (NdotL > 0.0) specCo = pow(max(0.0, dot(V, reflect(-(light), N))), 50.0); // 16 refers to shine
             specular += specCo;
         }
     }
 
-    //finalColor = vec4(texelColor);
+    float rimFactor = 1.0 - max(dot(N, V), 0.0);
 
-    finalColor = (texelColor * ((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0)));
-    finalColor += texelColor * (ambient / 10.0) * tint;
+    float rimPower = 5.0;
 
-    finalColor = pow(finalColor, vec4(1.0 / 2.2));
+    float rimLighting = pow(rimFactor, rimPower);
+
+    vec3 rimColor = vec3(0.4, 0.7, 0.9);
+    vec3 rimFinal = (rimLighting * rimColor);
+
+    finalColor = vec4(texelColor);
+
+    vec4 lightFinal = (((tint + vec4(specular, 1.0)) * vec4(lightDot, 1.0)));
+    lightFinal += (vec4(0.5) / 10.0) * tint;
+
+    finalColor = vec4(rimFinal, length(lightFinal.rgb));
+
+    // finalColor = pow(finalColor, vec4(1.0 / 2.2));
 }

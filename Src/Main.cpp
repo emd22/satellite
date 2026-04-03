@@ -66,8 +66,11 @@ public:
 
     rl::Shader SatLit;
     rl::Shader EarthLit;
+    rl::Shader AtmosphereShader;
+
     rl::Material SatMaterial;
     rl::Material EarthMaterial;
+    rl::Material AtmosphereMaterial;
 
     rl::Matrix* TransformBuffer;
 
@@ -77,7 +80,10 @@ public:
     double AngleY = 0.01;
 
     rl::Camera Camera {};
+
     rl::Mesh SatModel;
+    rl::Mesh AtmosphereModel;
+
     rl::Model Skybox;
 
     bool bAnimateTimeFrames = false;
@@ -92,19 +98,39 @@ Simulation::Simulation() {}
 
 void Simulation::InitGraphics()
 {
-    rl::InitWindow(1024, 720, "Space");
+    rl::InitWindow(900, 900, "Space");
 
 
     // Load font
-    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 20, 0, 250);
+    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 32, 0, 250);
 
     TransformBuffer = (rl::Matrix*)RL_CALLOC(TmpDataset.Size(), sizeof(rl::Matrix));
     UpdateTransformations();
 
     Earth = rl::LoadModel(ASSET_BASE_DIR "/Earth.glb");
     Skybox = rl::LoadModel(ASSET_BASE_DIR "/Skybox.glb");
-    SatModel = rl::GenMeshSphere(0.10f, 6.0f, 6.0f);
 
+    SatModel = rl::GenMeshSphere(0.15f, 6.0f, 6.0f);
+    AtmosphereModel = rl::GenMeshSphere(17.0f, 24.0f, 24.0f);
+
+
+    { // Load Atmosphere shader
+        AtmosphereShader = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
+                                          ASSET_BASE_DIR "/Shaders/Atmosphere.fs");
+        // Get shader locations
+        AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(AtmosphereShader, "mvp");
+        AtmosphereShader.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(AtmosphereShader, "viewPos");
+        AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MODEL] = rl::GetShaderLocationAttrib(AtmosphereShader, "matModel");
+
+        // Set shader value: ambient light level
+        int ambientLoc = rl::GetShaderLocation(AtmosphereShader, "ambient");
+        rl::SetShaderValue(AtmosphereShader, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 0.1f },
+                           rl::SHADER_UNIFORM_VEC4);
+
+        // Create one light
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
+                        rl::Color { 230, 180, 130 }, AtmosphereShader);
+    }
 
     { // Load lighting shader
         SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
@@ -115,11 +141,11 @@ void Simulation::InitGraphics()
 
         // Set shader value: ambient light level
         int ambientLoc = GetShaderLocation(SatLit, "ambient");
-        rl::SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 1000.0f, 100.0f, 0.0f }, rl::Vector3Zero(),
-                        rl::Color { 230, 200, 150 }, SatLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
+                        rl::Color { 230, 180, 130 }, SatLit);
     }
 
 
@@ -132,11 +158,11 @@ void Simulation::InitGraphics()
 
         // Set shader value: ambient light level
         int ambientLoc = rl::GetShaderLocation(EarthLit, "ambient");
-        rl::SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.5f, 0.5f, 0.5f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 1000.0f, 100.0f, 0.0f }, rl::Vector3Zero(),
-                        rl::Color { 230, 200, 150 }, EarthLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
+                        rl::Color { 230, 180, 130 }, EarthLit);
     }
 
     // NOTE: We are assigning the intancing shader to material.shader
@@ -144,6 +170,11 @@ void Simulation::InitGraphics()
     SatMaterial = rl::LoadMaterialDefault();
     SatMaterial.shader = SatLit;
     SatMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::WHITE;
+
+
+    AtmosphereMaterial = rl::LoadMaterialDefault();
+    AtmosphereMaterial.shader = AtmosphereShader;
+    // AtmosphereMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::WHITE, 1.0);
 
     rl::Texture2D texture = Earth.materials[1].maps[rl::MATERIAL_MAP_DIFFUSE].texture;
 
@@ -234,6 +265,8 @@ void Simulation::Render()
         float camera_pos[3] = { Camera.position.x, Camera.position.y, Camera.position.z };
         rl::SetShaderValue(SatLit, SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW], camera_pos, rl::SHADER_UNIFORM_VEC3);
         rl::SetShaderValue(EarthLit, EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW], camera_pos, rl::SHADER_UNIFORM_VEC3);
+        rl::SetShaderValue(AtmosphereShader, AtmosphereShader.locs[rl::SHADER_LOC_VECTOR_VIEW], camera_pos,
+                           rl::SHADER_UNIFORM_VEC3);
     }
 
 
@@ -257,16 +290,18 @@ void Simulation::Render()
 
     rl::BeginMode3D(Camera);
 
-
     rl::DrawModel(Skybox, rl::Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), rl::WHITE);
 
     rl::Matrix newmat = rl::MatrixScale(0.065, 0.065, 0.065);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
     rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
 
+    newmat = rl::MatrixScale(2.0, 2.0, 2.0);
+    rl::DrawMeshInstanced(AtmosphereModel, AtmosphereMaterial, &newmat, 1);
+
     rl::EndMode3D();
 
-    DrawText(String::Fmt("AFrame\t{}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 10, 10, 20);
+    DrawText(String::Fmt("Frame\t{}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 10, 10, 20);
     DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 10, 30, 14);
     DrawText(String::Fmt("Satellites\t{}", TmpDataset.Size()), 10, 45, 14);
 
