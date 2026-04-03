@@ -8,7 +8,6 @@
 
 #include <cassert>
 #include <cstdlib>
-#include <vector>
 
 namespace rl {
 
@@ -51,8 +50,7 @@ public:
     void Render();
 
     void StepNext();
-
-    const std::vector<rl::Vector3>& GetPositionsForTimeFrame();
+    void UpdateTransformations();
 
     ~Simulation();
 
@@ -86,33 +84,26 @@ public:
 };
 
 
-Simulation::Simulation()
-{
-    TmpDataset.LoadFromBin("../Positions.bin");
-    InitGraphics();
-}
+Simulation::Simulation() {}
 
 void Simulation::InitGraphics()
 {
     rl::InitWindow(1024, 720, "Space");
 
 
-    auto& positions = GetPositionsForTimeFrame();
+    // Load font
+    rl::Font font_ttf = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 64, 0, 250);
 
-    TransformBuffer = (rl::Matrix*)RL_CALLOC(positions.size(), sizeof(rl::Matrix));
+    TransformBuffer = (rl::Matrix*)RL_CALLOC(TmpDataset.Size(), sizeof(rl::Matrix));
+    UpdateTransformations();
 
-    for (int i = 0; i < positions.size(); i++) {
-        const rl::Vector3& pos = positions[i];
-        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
-
-    Earth = rl::LoadModel("../Earth.glb");
-    Skybox = rl::LoadModel("../Skybox.glb");
+    Earth = rl::LoadModel(ASSET_BASE_DIR "/Earth.glb");
+    Skybox = rl::LoadModel(ASSET_BASE_DIR "/Skybox.glb");
     SatModel = rl::GenMeshSphere(0.10f, 6.0f, 6.0f);
 
 
     { // Load lighting shader
-        SatLit = rl::LoadShader("../Shaders/LightingInstanced.vs", "../Shaders/Lighting.fs");
+        SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
         // Get shader locations
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
@@ -129,7 +120,7 @@ void Simulation::InitGraphics()
 
 
     { // Load lighting shader
-        EarthLit = rl::LoadShader("../Shaders/LightingDefault.vs", "../Shaders/Lighting.fs");
+        EarthLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
         // Get shader locations
         EarthLit.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(EarthLit, "mvp");
         EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(EarthLit, "viewPos");
@@ -173,12 +164,6 @@ void Simulation::InitGraphics()
 }
 
 
-const std::vector<rl::Vector3>& Simulation::GetPositionsForTimeFrame()
-{
-    assert(TimeFrameIndex < TmpDataset.Size());
-    return TmpDataset.GetPositionsForIndex(TimeFrameIndex);
-}
-
 Simulation::~Simulation()
 {
     RL_FREE(TransformBuffer);
@@ -189,16 +174,21 @@ Simulation::~Simulation()
     rl::CloseWindow();
 }
 
+void Simulation::UpdateTransformations()
+{
+    for (int i = 0; i < TmpDataset.Size(); i++) {
+        const Satellite& sat = TmpDataset.GetSatellite(i);
+        const Satellite::TimeStep& ts = sat.GetTimeStep(TimeFrameIndex);
+
+        const rl::Vector3 pos = ts.Position.ToRL();
+        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
+    }
+}
+
 void Simulation::StepNext()
 {
     TimeFrameIndex = ((TimeFrameIndex + 1) % scNumTimeCaptures);
-
-    auto& positions = GetPositionsForTimeFrame();
-
-    for (int i = 0; i < positions.size(); i++) {
-        const rl::Vector3& pos = positions[i];
-        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
+    UpdateTransformations();
 }
 
 void Simulation::CheckControls()
@@ -264,13 +254,13 @@ void Simulation::Render()
     //
     rl::Matrix newmat = rl::MatrixScale(0.065, 0.065, 0.065);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
-    rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, GetPositionsForTimeFrame().size());
+    rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
 
     rl::EndMode3D();
 
     rl::DrawText(rl::TextFormat("aframe:   %02i/%02i", TimeFrameIndex + 1, TmpDataset.Size()), 10, 10, 20, rl::WHITE);
     rl::DrawText("dataset: default", 10, 30, 14, rl::WHITE);
-    rl::DrawText(rl::TextFormat("sats:    %04i", TmpDataset.GetPositionsForIndex(0).size()), 10, 45, 14, rl::WHITE);
+    rl::DrawText(rl::TextFormat("sats:    %04i", TmpDataset.Size()), 10, 45, 14, rl::WHITE);
 
     rl::EndDrawing();
 
@@ -280,12 +270,24 @@ void Simulation::Render()
 
 int main(int argc, char* argv[])
 {
+    Simulation sim {};
+
     if (argc > 1 && !strcmp(argv[1], "rebuild")) {
         // GeneratePositions();
-        Dataset::SaveFromTLE("../NORAD_TLE.txt", "../Positions.bin");
+        printf("Rebuilding satellite cache\n");
+
+        sim.TmpDataset.LoadFromTLE(ASSET_BASE_DIR "/Datasets/NORAD_TLE.txt", ASSET_BASE_DIR "/Cache.bin");
+        printf("Loaded %d satellites\n", sim.TmpDataset.Size());
+
+
+        sim.TmpDataset.SaveToBin(ASSET_BASE_DIR "/Cache.bin");
+    }
+    else {
+        sim.TmpDataset.LoadFromBin(ASSET_BASE_DIR "/Cache.bin");
     }
 
-    Simulation sim {};
+    sim.InitGraphics();
+
 
     while (!rl::WindowShouldClose()) {
         sim.CheckControls();

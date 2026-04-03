@@ -11,13 +11,8 @@ file (GLOB_RECURSE SOURCES "Src/*.cpp" "Src/*.inl")
 file (GLOB_RECURSE HEADERS "Src/*.hpp" "Src/*.h" "Src/*.inl")
 
 add_definitions(
-    -DVMA_RECORDING_ENABLED=1
-    -DVMA_DEBUG_ALWAYS_DETECT_LEAKS=1
-
-    -DVK_ENABLE_BETA_EXTENSIONS=1   # Used by PortabilitySubsetFeaturesKHR for macOS; From around 2020, but still under BETA_EXTENSIONS per vulkan.h.
-
 	-D_USE_MATH_DEFINES
-	-DFX_BASE_DIR="${CMAKE_SOURCE_DIR}"
+	-DASSET_BASE_DIR="${CMAKE_SOURCE_DIR}"
     # -DFX_DEBUG_STATIC_ARRAY
 )
 

@@ -5,7 +5,6 @@
 
 #include <format>
 #include <string>
-
 /**
  * @brief Generic string class. Allocated with a set amount of stack memory, allocates to heap when there is no space
  * remaining.
@@ -25,11 +24,8 @@ public:
 
     FORCE_INLINE bool IsHeapAllocated() const { return (mpHeapStr != nullptr); }
 
-    Hash32 ToHash32();
-
     FORCE_INLINE uint32 GetLength() const { return Length; }
-
-    const char* CStr() const
+    FORCE_INLINE const char* CStr() const
     {
         if (IsHeapAllocated()) {
             return mpHeapStr;
@@ -38,6 +34,9 @@ public:
         return mpStackStr;
     }
 
+    Hash32 GetHash();
+    FORCE_INLINE void InvalidateHash() { mHash = HashNull32; }
+
     String& operator=(const char* str);
 
     String operator+(const String& other) const;
@@ -45,6 +44,7 @@ public:
 
     const char operator[](size_t index) const;
     char& operator[](size_t index);
+
 
     ~String();
 
@@ -64,6 +64,8 @@ public:
 private:
     char mpStackStr[scStackAllocSize];
     char* mpHeapStr = nullptr;
+
+    Hash32 mHash = HashNull32;
 };
 
 

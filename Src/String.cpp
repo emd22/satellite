@@ -1,5 +1,6 @@
 #include "String.hpp"
 
+#include "Hash.hpp"
 #include "Mem.hpp"
 #include "Slice.hpp"
 
@@ -28,11 +29,13 @@ String::String(const char* str, uint32 length)
     dst[length] = 0;
 }
 
-Hash32 String::ToHash32()
+Hash32 String::GetHash()
 {
-    // The string should be null-terminated anyway, but its more coherent to pass in the data and known length as a
-    // slice here
-    return HashData32(Slice(GetInternalPtr(), Length));
+    if (mHash == HashNull32) {
+        mHash = HashData32(Slice<char>(GetInternalPtr(), Length));
+    }
+
+    return mHash;
 }
 
 String::String(const char* str) : String(str, strlen(str)) {}
@@ -98,11 +101,14 @@ String& String::operator=(const char* str)
         dst = mpHeapStr;
     }
 
+
     memcpy(dst, str, new_len);
 
 
     Length = new_len;
     dst[Length] = 0;
+
+    InvalidateHash();
 
     return *this;
 }
@@ -119,4 +125,6 @@ String::~String()
 
     mpHeapStr = nullptr;
     Length = 0;
+
+    InvalidateHash();
 }

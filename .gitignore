@@ -2,5 +2,17 @@ build
 build/**/*
 .cache/**/*
 a.out
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+Cache.bin
+CMakeFiles
 
 .DS_Store
+
+.*
+
+# Things excluded from the gitignore
+!.gitignore
+!.clang*
