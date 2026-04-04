@@ -17,11 +17,10 @@ public:
     void AddTimeStep(const TimeStep& ts) { TimeSteps.push_back(ts); }
     const TimeStep& GetTimeStep(uint32 time_step) const { return TimeSteps[time_step % TimeSteps.size()]; }
 
-    const Vec3r& MoveToTimeStep(uint32 frame_start, uint32 time_step, bool warp_to = false)
+    const Vec3r& MoveToTimeStep(uint32 time_step, bool warp_to = false)
     {
         Position = GoalPosition;
 
-        FrameStart = frame_start;
         GoalPosition = GetTimeStep(time_step).Position;
 
         if (warp_to) {
@@ -38,7 +37,7 @@ public:
     void CalculateMoveSpeed(uint32 lerp_frames)
     {
         LerpFrames = lerp_frames;
-        Position = MoveToTimeStep(0, 0);
+        Position = MoveToTimeStep(1);
     }
 
 public:

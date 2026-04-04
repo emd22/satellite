@@ -96,6 +96,30 @@ static String FindNameForPath(const String& path)
     return name;
 }
 
+static void SetNamesForSatellite(const std::string& name_line, Satellite& sat)
+{
+    uint32 i = 0;
+    uint32 line_len = name_line.length();
+
+    const char* line_cstr = name_line.c_str();
+
+    for (; i < line_len; i++) {
+        char ch = name_line[i];
+        if (ch == '-') {
+            sat.Series = String(line_cstr, i);
+            ++i;
+            break;
+        }
+    }
+
+    const char* ident_start = line_cstr + i;
+
+    while (i < line_len)
+        i++;
+
+    sat.Identifier = String(ident_start, i);
+}
+
 
 void Dataset::LoadFromTLE(const String& tle_path)
 {
@@ -139,6 +163,8 @@ void Dataset::LoadFromTLE(const String& tle_path)
 
             sat.AddTimeStep(time_step);
         }
+
+        SetNamesForSatellite(name_line, sat);
 
         Satellites.push_back(sat);
     }
