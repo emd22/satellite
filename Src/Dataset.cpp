@@ -53,7 +53,6 @@ Satellite::TimeStep TleContext::GetTimeStepForTime(double time)
 
     // Convert the double precision results into our real number type in the vector
     force.Position = Vec3r(pos_buffer);
-    force.Velocity = Vec3r(vel_buffer);
 
     return force;
 }
@@ -112,7 +111,7 @@ void Dataset::LoadFromTLE(const String& tle_path)
     std::string line1;
     std::string line2;
 
-    constexpr float cScaleMultiplier = 0.0005f;
+    constexpr float cScaleMultiplier = 0.00035f;
 
     NumTimesteps = scNumTimeCaptures;
 
@@ -137,7 +136,6 @@ void Dataset::LoadFromTLE(const String& tle_path)
         for (uint32 i = 0; i < scNumTimeCaptures; i++) {
             Satellite::TimeStep time_step = tle_ctx.GetTimeStepForTime(scStartTime + (scTimeJump * i));
             time_step.Position *= cScaleMultiplier;
-            time_step.Velocity *= cScaleMultiplier;
 
             sat.AddTimeStep(time_step);
         }

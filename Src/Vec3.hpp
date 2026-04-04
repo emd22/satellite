@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <type_traits>
 
+#define FClamp(x, minv, maxv) std::fminf(std::fmaxf(x, maxv), minv)
+
 
 namespace rl {
 #include "ThirdParty/raylib.h"
@@ -75,6 +77,13 @@ public:
     float32 Dot(const Vec3r& other) const { return (X * other.X + Y * other.Y + Z * other.Z); }
 
     FORCE_INLINE Vec3r operator+(const Vec3r& other) const { return Vec3r(X + other.X, Y + other.Y, Z + other.Z); }
+    FORCE_INLINE Vec3r& operator+=(const Vec3r& other)
+    {
+        X += other.X;
+        Y += other.Y;
+        Z += other.Z;
+        return *this;
+    }
     FORCE_INLINE Vec3r operator-(const Vec3r& other) const { return Vec3r(X - other.X, Y - other.Y, Z - other.Z); }
     FORCE_INLINE Vec3r operator/(const Vec3r& other) const { return Vec3r(X / other.X, Y / other.Y, Z / other.Z); }
 
@@ -104,12 +113,23 @@ public:
 
     Vec3r SLerp(const Vec3r& dest, float32 t) const
     {
-        float dp = Dot(dest);
+        // Normalize inputs
+        Vec3r v0 = Normalize();
+        Vec3r v1 = dest.Normalize();
+
+        // Compute the cosine of the angle between them
+        float32 dp = Dot(v1);
+
+        // Clamp to avoid precision issues
+        dp = FClamp(dp, -1.0f, 1.0f);
+
         float theta = acosf(dp) * t;
 
-        Vec3r rel_v = (dest - *this * dp).Normalize();
+        // Compute perpendicular component
+        Vec3r relative = ((v1 - (v0 * dp))).Normalize();
 
-        return ((*this * cosf(theta)) + (rel_v * sinf(theta)));
+        // Slerp result
+        return ((v0 * cosf(theta)) + (relative * sinf(theta)));
     }
 
 
@@ -122,12 +142,24 @@ public:
         return *this;
     }
 
-    FORCE_INLINE Vec3r& SmoothInterpolate(const Vec3r& dest, const float speed, const float delta_time)
-    {
-        LerpIP(dest, 1.0f - std::expf(-speed * delta_time));
 
+    FORCE_INLINE Vec3r Lerp(const Vec3r& dest, const float step) const
+    {
+        Vec3r x = *this;
+
+        x.X = std::lerp(X, dest.X, step);
+        x.Y = std::lerp(Y, dest.Y, step);
+        x.Z = std::lerp(Z, dest.Z, step);
+
+        return x;
+    }
+
+    FORCE_INLINE Vec3r SmoothInterpolate(const Vec3r& dest, const float speed, const float delta_time) const
+    {
+        Vec3r x = *this;
+        x.LerpIP(dest, 1.0f - std::expf(-speed * delta_time));
         // *this = SLerp(dest, 1.0 - std::expf(-speed * delta_time));
-        return *this;
+        return x;
     }
 
 

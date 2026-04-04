@@ -19,7 +19,8 @@ public:
 
     FORCE_INLINE uint32 Size() const { return Satellites.size(); }
 
-    const Satellite& GetSatellite(uint32 index) { return Satellites[index]; }
+    const Satellite& GetSatellite(uint32 index) const { return Satellites[index]; }
+    Satellite& GetSatellite(uint32 index) { return Satellites[index]; }
 
 public:
     String Name = "Unknown";

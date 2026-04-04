@@ -26,7 +26,7 @@ namespace rl {
 #include "Vec3.hpp"
 
 /// The number of frames it takes for a satellite to reach its destination.
-static constexpr float32 scNumLerpFrames = 10;
+static constexpr uint32 scNumLerpFrames = 40;
 
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
@@ -36,7 +36,7 @@ static constexpr float32 scNumLerpFrames = 10;
 static constexpr float32 scMouseSensitivity = 0.005f;
 
 static constexpr float cPoleLimitOffset = 0.005;
-static constexpr float cDefaultZoom = 20.0f;
+static constexpr float cDefaultZoom = 15.0f;
 
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
@@ -53,9 +53,13 @@ public:
     void Render();
 
     void StepNext();
-    void UpdateTransformations();
+    void UpdateTransformations(bool warp_to = false);
 
     void DrawText(const String& text, float32 x, float32 y, float32 size);
+
+    void UpdateSatellites();
+
+    rl::Vector3 GetSunPosition() { return SunPos.ToRL(); }
 
     ~Simulation();
 
@@ -88,6 +92,9 @@ public:
     rl::Mesh AtmosphereModel;
 
     rl::Model Skybox;
+    rl::Model SunModel;
+
+    Vec3r SunPos = Vec3r { 100.0f, 50.0f, 0.0f };
 
     bool bAnimateTimeFrames = false;
 
@@ -95,6 +102,17 @@ public:
 
     rl::Font Font;
 };
+
+void Simulation::UpdateSatellites()
+{
+    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
+        Satellite& sat = TmpDataset.GetSatellite(i);
+        sat.UpdatePosition(FrameCount, rl::GetFrameTime());
+
+        const rl::Vector3 pos = sat.Position.ToRL();
+        TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
+    }
+}
 
 
 Simulation::Simulation() {}
@@ -110,8 +128,14 @@ void Simulation::InitGraphics()
     TransformBuffer = (rl::Matrix*)RL_CALLOC(TmpDataset.Size(), sizeof(rl::Matrix));
     UpdateTransformations();
 
+    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
+        Satellite& sat = TmpDataset.GetSatellite(i);
+        sat.CalculateMoveSpeed(scNumLerpFrames);
+    }
+
     Earth = rl::LoadModel(ASSET_BASE_DIR "/Earth.glb");
     Skybox = rl::LoadModel(ASSET_BASE_DIR "/Skybox.glb");
+    SunModel = rl::LoadModel(ASSET_BASE_DIR "/Sun.glb");
 
     SatModel = rl::GenMeshSphere(0.005f, 6.0f, 6.0f);
     AtmosphereModel = rl::GenMeshSphere(3.0f, 24.0f, 24.0f);
@@ -132,12 +156,12 @@ void Simulation::InitGraphics()
                            rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
-                        rl::Color { 230, 180, 130 }, AtmosphereShader);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
+                        AtmosphereShader);
     }
 
     { // Load lighting shader
-        SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
+        SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", nullptr);
         // Get shader locations
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
@@ -148,8 +172,8 @@ void Simulation::InitGraphics()
         rl::SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
-                        rl::Color { 230, 180, 130 }, SatLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
+                        SatLit);
     }
 
 
@@ -165,8 +189,8 @@ void Simulation::InitGraphics()
         rl::SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
-        rl::CreateLight(rl::LIGHT_DIRECTIONAL, (rl::Vector3) { 100.0f, 50.0f, 0.0f }, rl::Vector3Zero(),
-                        rl::Color { 230, 180, 130 }, EarthLit);
+        rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
+                        EarthLit);
     }
 
     // NOTE: We are assigning the intancing shader to material.shader
@@ -209,17 +233,18 @@ Simulation::~Simulation()
 
     rl::UnloadModel(Earth);
     rl::UnloadModel(Skybox);
+    rl::UnloadModel(SunModel);
 
     rl::CloseWindow();
 }
 
-void Simulation::UpdateTransformations()
+void Simulation::UpdateTransformations(bool warp_to)
 {
     for (int i = 0; i < TmpDataset.Size(); i++) {
-        const Satellite& sat = TmpDataset.GetSatellite(i);
-        const Satellite::TimeStep& ts = sat.GetTimeStep(TimeFrameIndex);
+        Satellite& sat = TmpDataset.GetSatellite(i);
+        const Vec3r& position = sat.MoveToTimeStep(FrameCount, TimeFrameIndex, warp_to);
 
-        const rl::Vector3 pos = ts.Position.ToRL();
+        const rl::Vector3 pos = position.ToRL();
         TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
     }
 }
@@ -227,7 +252,15 @@ void Simulation::UpdateTransformations()
 void Simulation::StepNext()
 {
     TimeFrameIndex = ((TimeFrameIndex + 1) % scNumTimeCaptures);
-    UpdateTransformations();
+
+    bool warp = false;
+
+    if (TimeFrameIndex == 0) {
+        // Reset all goals
+        warp = true;
+    }
+
+    UpdateTransformations(warp);
 }
 
 void Simulation::CheckControls()
@@ -246,9 +279,14 @@ void Simulation::DrawText(const String& text, float32 x, float32 y, float32 size
     rl::DrawTextEx(Font, text.CStr(), rl::Vector2 { x, y }, float32(size), 2, rl::WHITE);
 }
 
+
 void Simulation::Render()
 {
-    if (bAnimateTimeFrames && !(FrameCount % 5)) {
+    if (bAnimateTimeFrames) {
+        UpdateSatellites();
+    }
+
+    if (bAnimateTimeFrames && !(FrameCount % scNumLerpFrames)) {
         StepNext();
     }
 
@@ -295,6 +333,11 @@ void Simulation::Render()
     rl::BeginMode3D(Camera);
 
     rl::DrawModel(Skybox, rl::Vector3 { 0.0f, 0.0f, 0.0f }, 1.0 + (Zoom / cDefaultZoom), rl::WHITE);
+
+    rl::rlDisableBackfaceCulling();
+    rl::DrawModel(SunModel, (SunPos * 0.8).ToRL(), 2.0, rl::WHITE);
+    rl::rlEnableBackfaceCulling();
+
 
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
