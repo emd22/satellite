@@ -110,10 +110,10 @@ public:
 
         if (pPickedSatellite) {
             rl::Color default_color = material.maps[rl::MATERIAL_MAP_DIFFUSE].color;
-            material.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(100, 0, 0), 255);
+            material.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(200, 0, 0), 255);
 
             const rl::Vector3 pos = pPickedSatellite->Position.ToRL();
-            rl::Matrix matrix = rl::MatrixMultiply(rl::MatrixScale(2.0, 2.0, 2.0),
+            rl::Matrix matrix = rl::MatrixMultiply(rl::MatrixScale(3.0, 3.0, 3.0),
                                                    rl::MatrixTranslate(pos.x, pos.y, pos.z));
 
             rl::DrawMeshInstanced(sat_model, material, &matrix, 1);

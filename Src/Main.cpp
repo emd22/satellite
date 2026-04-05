@@ -28,7 +28,7 @@ namespace rl {
 #include "Vec3.hpp"
 
 /// The number of frames it takes for a satellite to reach its destination.
-static constexpr uint32 scNumLerpFrames = 250;
+static uint32 sNumLerpFrames = 250;
 
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
@@ -71,6 +71,7 @@ public:
     void SetCameraTarget(const Vec3r& target);
 
     bool IsDefaultFilter() const { return (pFilterInUse == &DefaultFilter); }
+    void UpdateLerpSpeed(uint32 lerp_frames);
 
     ~Simulation();
 
@@ -215,6 +216,16 @@ void Simulation::SetCameraTarget(const Vec3r& target)
     Camera.target = CameraCenter.ToRL();
 }
 
+void Simulation::UpdateLerpSpeed(uint32 lerp_frames)
+{
+    sNumLerpFrames = lerp_frames;
+
+    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
+        Satellite& sat = TmpDataset.GetSatellite(i);
+        sat.CalculateMoveSpeed(sNumLerpFrames);
+    }
+}
+
 void Simulation::InitGraphics()
 {
     int window_width = 900;
@@ -226,13 +237,13 @@ void Simulation::InitGraphics()
     UICellSizeY = (float32(window_height) - scUIPaddingVertical) / scUIGridVerticalSplits;
 
     // Load font
-    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 32, 0, 250);
+    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 64, 0, 250);
 
     UpdateTransformations();
 
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
-        sat.CalculateMoveSpeed(scNumLerpFrames);
+        sat.CalculateMoveSpeed(sNumLerpFrames);
 
         DefaultFilter.AddSatellite(sat, GenerateRandomColor(sat.Series.GetHash()));
     }
@@ -436,6 +447,13 @@ void Simulation::CheckControls()
         Step(-1);
     }
 
+    if (rl::IsKeyPressed(rl::KEY_EQUAL) && sNumLerpFrames > 10) {
+        UpdateLerpSpeed(sNumLerpFrames - 15);
+    }
+    else if (rl::IsKeyPressed(rl::KEY_MINUS) && sNumLerpFrames < 300) {
+        UpdateLerpSpeed(sNumLerpFrames + 15);
+    }
+
     if (rl::IsKeyPressed(rl::KEY_P)) {
         bAnimateTimeFrames = !bAnimateTimeFrames;
     }
@@ -463,7 +481,7 @@ void Simulation::Render()
         }
     }
 
-    if (bAnimateTimeFrames && !(FrameCount % scNumLerpFrames)) {
+    if (bAnimateTimeFrames && !(FrameCount % sNumLerpFrames)) {
         Step(1);
     }
 

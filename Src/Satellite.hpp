@@ -34,11 +34,7 @@ public:
 
     void UpdatePosition() { Position += Movement; }
 
-    void CalculateMoveSpeed(uint32 lerp_frames)
-    {
-        LerpFrames = lerp_frames;
-        Position = MoveToTimeStep(1);
-    }
+    void CalculateMoveSpeed(uint32 lerp_frames) { LerpFrames = lerp_frames; }
 
 public:
     String Series;
