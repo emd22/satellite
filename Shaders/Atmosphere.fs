@@ -14,6 +14,9 @@ out vec4 finalColor;
 #define LIGHT_DIRECTIONAL 1
 #define LIGHT_POINT 0
 
+// Based on "Atmospheric Scattering Sample" on ShaderToy by glTracy. Link: https://www.shadertoy.com/view/lslXDr
+// Modified quite a bit to get it to work with the data we have passed in.
+
 struct Light {
     int enabled;
     int type;
@@ -32,8 +35,8 @@ const float MAX_DIST = 10000.0;
 const float R_INNER = 2.0;
 const float R = R_INNER + 0.6;
 
-const int NUM_OUT_SCATTER = 8;
-const int NUM_IN_SCATTER = 80;
+const int NUM_OUT_SCATTER = 6;
+const int NUM_IN_SCATTER = 50;
 
 vec2 ray_vs_sphere(vec3 p, vec3 dir, float r)
 {

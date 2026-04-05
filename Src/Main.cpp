@@ -21,6 +21,7 @@ namespace rl {
 } // namespace rl
 
 #include "Config.hpp"
+#include "Filter.hpp"
 #include "Mem.hpp"
 #include "String.hpp"
 #include "Types.hpp"
@@ -37,64 +38,11 @@ static constexpr uint32 scNumLerpFrames = 40;
 static constexpr float32 scMouseSensitivity = 0.005f;
 
 static constexpr float cPoleLimitOffset = 0.005;
-static constexpr float cDefaultZoom = 15.0f;
+static constexpr float cDefaultZoom = 10.0f;
+static constexpr float cSinglePointZoom = 2.0f;
 
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
-
-
-class Filter
-{
-public:
-    struct Component
-    {
-        void UpdateTransforms()
-        {
-            for (int i = 0; i < Satellites.size(); i++) {
-                Satellite* sat = Satellites[i];
-                if (!sat) {
-                    continue;
-                }
-
-                const Vec3r& position = sat->Position;
-
-                const rl::Vector3 pos = position.ToRL();
-                TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-            }
-        }
-
-        void Finalize()
-        {
-            if (TransformBuffer != nullptr) {
-                TransformBuffer = Mem::Realloc<rl::Matrix>(TransformBuffer, Satellites.size() * sizeof(rl::Matrix));
-            }
-            else {
-                TransformBuffer = Mem::Alloc<rl::Matrix>(Satellites.size() * sizeof(rl::Matrix));
-            }
-
-            UpdateTransforms();
-        }
-
-        uint32 Size() { return Satellites.size(); }
-
-        bool Exists() const { return TransformBuffer != nullptr; }
-
-        ~Component() { Mem::Free(TransformBuffer); }
-
-        std::vector<Satellite*> Satellites;
-        rl::Matrix* TransformBuffer = nullptr;
-    };
-
-    void Finalize()
-    {
-        Unselected.Finalize();
-        Selected.Finalize();
-    }
-
-public:
-    Component Unselected;
-    Component Selected;
-};
 
 
 class Simulation
@@ -107,18 +55,17 @@ public:
     void CheckControls();
     void Render();
 
-    void StepNext();
+    void Step(int32 by);
     void UpdateTransformations(bool warp_to = false);
 
     void DrawText(const String& text, float32 x, float32 y, float32 size);
-
     void UpdateSatellites();
-
     rl::Vector3 GetSunPosition() { return SunPos.ToRL(); }
-
     Satellite* CheckForSatPicking();
+    void SelectSatellite(Satellite* selection);
+    void SetCameraTarget(const Vec3r& target);
 
-    void SelectAllLinkedSats(Satellite* selection);
+    bool IsDefaultFilter() const { return (FilterInUse == &DefaultFilter); }
 
     ~Simulation();
 
@@ -139,11 +86,18 @@ public:
     rl::Material EarthMaterial;
     rl::Material AtmosphereMaterial;
 
-    Filter DefaultFilter;
-    Filter SelectedFilter;
-    Filter* FilterInUse = &DefaultFilter;
+    NormalFilter DefaultFilter;
+    SelectionFilter SelectedFilter;
+    BaseFilter* FilterInUse = &DefaultFilter;
 
-    float Zoom = cDefaultZoom;
+    Vec3r CameraPosition = Vec3r::sZero;
+    Vec3r CameraCenter = Vec3r::sZero;
+
+    float32 Zoom = cDefaultZoom;
+    float32 SavedZoom = Zoom;
+
+    double SavedAngleX = 0.01;
+    double SavedAngleY = 0.01;
 
     double AngleX = 0.01;
     double AngleY = 0.01;
@@ -155,45 +109,20 @@ public:
 
     rl::Model Skybox;
     rl::Model SunModel;
+    rl::Font Font;
 
     Satellite* PickedSatellite = nullptr;
 
-
     Vec3r SunPos = Vec3r { 100.0f, 50.0f, 0.0f };
 
-    bool bAnimateTimeFrames = false;
 
     uint64 FrameCount = 0;
 
-    rl::Font Font;
+
+    bool bAnimateTimeFrames = false;
 };
 
-void Simulation::UpdateSatellites()
-{
-    // for (uint32 i = 0; i < TmpDataset.Size(); i++) {
-    //     Satellite& sat = TmpDataset.GetSatellite(i);
-    //     sat.UpdatePosition(FrameCount, rl::GetFrameTime());
-
-    //     const rl::Vector3 pos = sat.Position.ToRL();
-    //     TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    // }
-
-    for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
-        Satellite* sat = FilterInUse->Unselected.Satellites[i];
-        sat->UpdatePosition(FrameCount, rl::GetFrameTime());
-
-        const rl::Vector3 pos = sat->Position.ToRL();
-        FilterInUse->Unselected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
-
-    for (int i = 0; i < FilterInUse->Selected.Size(); i++) {
-        Satellite* sat = FilterInUse->Selected.Satellites[i];
-        sat->UpdatePosition(FrameCount, rl::GetFrameTime());
-
-        const rl::Vector3 pos = sat->Position.ToRL();
-        FilterInUse->Selected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
-}
+void Simulation::UpdateSatellites() { FilterInUse->UpdateSatellites({}, false); }
 
 
 Simulation::Simulation() {}
@@ -214,6 +143,70 @@ Satellite* Simulation::CheckForSatPicking()
     return nullptr;
 }
 
+rl::Color HSVToRGB(float32 H, float32 S, float32 V)
+{
+    float r, g, b;
+
+    float h = H / 360;
+    float s = S / 100;
+    float v = V / 100;
+
+    int i = floor(h * 6);
+    float f = h * 6 - i;
+    float p = v * (1 - s);
+    float q = v * (1 - f * s);
+    float t = v * (1 - (1 - f) * s);
+
+    switch (i % 6) {
+    case 0:
+        r = v, g = t, b = p;
+        break;
+    case 1:
+        r = q, g = v, b = p;
+        break;
+    case 2:
+        r = p, g = v, b = t;
+        break;
+    case 3:
+        r = p, g = q, b = v;
+        break;
+    case 4:
+        r = t, g = p, b = v;
+        break;
+    case 5:
+        r = v, g = p, b = q;
+        break;
+    }
+
+    rl::Color color;
+    color.r = r * 255;
+    color.g = g * 255;
+    color.b = b * 255;
+
+    return color;
+}
+
+static rl::Color GenerateRandomColor(Hash32 series_hash)
+{
+    static uint32 seed = 0;
+    if (seed == series_hash) {
+        return rl::WHITE;
+    }
+
+    srand(series_hash);
+    seed = series_hash;
+
+    float32 hue = float32(rand() % 100);
+
+    return HSVToRGB(hue, 70, 100);
+}
+
+void Simulation::SetCameraTarget(const Vec3r& target)
+{
+    CameraCenter = target;
+    Camera.target = CameraCenter.ToRL();
+}
+
 void Simulation::InitGraphics()
 {
     rl::InitWindow(900, 900, "Space");
@@ -227,7 +220,8 @@ void Simulation::InitGraphics()
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
         sat.CalculateMoveSpeed(scNumLerpFrames);
-        DefaultFilter.Unselected.Satellites.push_back(&sat);
+
+        DefaultFilter.AddSatellite(sat, GenerateRandomColor(sat.Series.GetHash()));
     }
 
     DefaultFilter.Finalize();
@@ -300,12 +294,10 @@ void Simulation::InitGraphics()
 
     SelectedMaterial = rl::LoadMaterialDefault();
     SelectedMaterial.shader = SatLit;
-    SelectedMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::Color(255, 165, 0);
-
+    SelectedMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(255, 165, 0), 255);
 
     AtmosphereMaterial = rl::LoadMaterialDefault();
     AtmosphereMaterial.shader = AtmosphereShader;
-    // AtmosphereMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::WHITE, 1.0);
 
     rl::Texture2D texture = Earth.materials[1].maps[rl::MATERIAL_MAP_DIFFUSE].texture;
 
@@ -314,25 +306,34 @@ void Simulation::InitGraphics()
     EarthMaterial.maps[rl::MATERIAL_MAP_DIFFUSE].texture = texture;
 
     Camera.position = rl::Vector3 { 100.0f, 0.0f, -100.0f };
-    Camera.target = rl::Vector3 { 0.0f, 0.0f, 0.0f };
+    SetCameraTarget(Vec3r::sZero);
+
     Camera.up = rl::Vector3 { 0.0f, 1.0f, 0.0f };
-    Camera.fovy = 65.0f;
+    Camera.fovy = 70.0f;
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
-    // Earth.materials[0].shader = EarthLit;
-    // Earth.materials[1] = LoadMaterialDefault();
-    // Earth.materials[1].shader = EarthLit;
-    // Earth.materials[1].maps[MATERIAL_MAP_DIFFUSE].color = WHITE;
-
-
-    rl::SetTargetFPS(60);
+    rl::SetTargetFPS(120);
 }
 
 
-void Simulation::SelectAllLinkedSats(Satellite* selected)
+void Simulation::SelectSatellite(Satellite* selected)
 {
+    if (IsDefaultFilter()) {
+        SavedAngleX = AngleX;
+        SavedAngleY = AngleY;
+        SavedZoom = Zoom;
+    }
+
     if (!selected) {
+        SetCameraTarget(Vec3r::sZero);
+        Zoom = SavedZoom;
+
+        AngleX = SavedAngleX;
+        AngleY = SavedAngleY;
+
+        FilterInUse = &DefaultFilter;
+
         return;
     }
 
@@ -349,8 +350,11 @@ void Simulation::SelectAllLinkedSats(Satellite* selected)
     }
 
     SelectedFilter.Finalize();
-
     FilterInUse = &SelectedFilter;
+
+    SetCameraTarget(selected->Position);
+
+    Zoom = cSinglePointZoom;
 }
 
 Simulation::~Simulation()
@@ -366,31 +370,41 @@ Simulation::~Simulation()
 
 void Simulation::UpdateTransformations(bool warp_to)
 {
-    for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
-        Satellite* sat = FilterInUse->Unselected.Satellites[i];
-        const Vec3r& position = sat->MoveToTimeStep(TimeFrameIndex, warp_to);
+    FilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), warp_to);
 
-        const rl::Vector3 pos = position.ToRL();
-        FilterInUse->Unselected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
+    // for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
+    //     Satellite* sat = FilterInUse->Unselected.Satellites[i];
+    //     const Vec3r& position = sat->MoveToTimeStep(TimeFrameIndex, warp_to);
 
-    for (int i = 0; i < FilterInUse->Selected.Size(); i++) {
-        Satellite* sat = FilterInUse->Selected.Satellites[i];
-        const Vec3r& position = sat->MoveToTimeStep(TimeFrameIndex, warp_to);
+    //     const rl::Vector3 pos = position.ToRL();
+    //     FilterInUse->Unselected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
+    // }
 
-        const rl::Vector3 pos = position.ToRL();
-        FilterInUse->Selected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
-    }
+    // for (int i = 0; i < FilterInUse->Selected.Size(); i++) {
+    //     Satellite* sat = FilterInUse->Selected.Satellites[i];
+    //     const Vec3r& position = sat->MoveToTimeStep(TimeFrameIndex, warp_to);
+
+    //     const rl::Vector3 pos = position.ToRL();
+    //     FilterInUse->Selected.TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
+    // }
 }
 
-void Simulation::StepNext()
+void Simulation::Step(int32 by)
 {
-    TimeFrameIndex = ((TimeFrameIndex + 1) % scNumTimeCaptures);
+    if (int32(TimeFrameIndex) + by < 0) {
+        TimeFrameIndex = scNumTimeCaptures - 1;
+    }
+    else if (int32(TimeFrameIndex) + by >= scNumTimeCaptures) {
+        TimeFrameIndex = 0;
+    }
+    else {
+        TimeFrameIndex += by;
+    }
+
 
     bool warp = false;
 
     if (TimeFrameIndex == 0) {
-        // Reset all goals
         warp = true;
     }
 
@@ -399,8 +413,11 @@ void Simulation::StepNext()
 
 void Simulation::CheckControls()
 {
-    if (rl::IsKeyPressed(rl::KEY_SPACE)) {
-        StepNext();
+    if (rl::IsKeyPressed(rl::KEY_PERIOD)) { // Greater than symbol
+        Step(1);
+    }
+    else if (rl::IsKeyPressed(rl::KEY_COMMA)) {
+        Step(-1);
     }
 
     if (rl::IsKeyPressed(rl::KEY_P)) {
@@ -423,7 +440,7 @@ void Simulation::Render()
     }
 
     if (bAnimateTimeFrames && !(FrameCount % scNumLerpFrames)) {
-        StepNext();
+        Step(1);
     }
 
     if (AngleX > M_PI) {
@@ -435,9 +452,13 @@ void Simulation::Render()
 
     AngleY = rl::Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
 
-    Camera.position.x = Zoom * cosf(AngleX) * sinf(AngleY);
-    Camera.position.y = Zoom * cosf(AngleY);
-    Camera.position.z = Zoom * sinf(AngleY) * sinf(AngleX);
+    CameraPosition.X = Zoom * cosf(AngleX) * sinf(AngleY);
+    CameraPosition.Y = Zoom * cosf(AngleY);
+    CameraPosition.Z = Zoom * sinf(AngleY) * sinf(AngleX);
+
+
+    Camera.position = (CameraPosition + CameraCenter).ToRL();
+
 
     {
         float camera_pos[3] = { Camera.position.x, Camera.position.y, Camera.position.z };
@@ -450,7 +471,9 @@ void Simulation::Render()
 
     float zoom_movement = rl::GetMouseWheelMove();
     if (abs(zoom_movement) > 0.005f) {
-        Zoom += zoom_movement * 0.5;
+        float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
+
+        Zoom += zoom_movement * ((0.005 * distance_to_planet));
     }
 
     if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
@@ -473,14 +496,8 @@ void Simulation::Render()
     if (rl::IsMouseButtonReleased(rl::MOUSE_LEFT_BUTTON) && mouse_pressed) {
         Satellite* sat = CheckForSatPicking();
 
-        if (sat) {
-            printf("Picked Satellite: %s\n", sat->Series.CStr());
-            PickedSatellite = sat;
-            SelectAllLinkedSats(PickedSatellite);
-        }
-        else {
-            FilterInUse = &DefaultFilter;
-        }
+        PickedSatellite = sat;
+        SelectSatellite(PickedSatellite);
 
         mouse_pressed = false;
     }
@@ -501,33 +518,29 @@ void Simulation::Render()
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
+    FilterInUse->RenderSatellites(SatModel, SatMaterial);
 
-    if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
-        rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
-                              FilterInUse->Unselected.Size());
-    }
+    // if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
+    //     rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
+    //                           FilterInUse->Unselected.Size());
+    // }
 
-    if (FilterInUse->Selected.Exists()) {
-        rl::DrawMeshInstanced(SatModel, SelectedMaterial, FilterInUse->Selected.TransformBuffer,
-                              FilterInUse->Selected.Size());
-    }
-
-    // rl::DrawMeshInstanced(SatModel, SatMaterial, TransformBuffer, TmpDataset.Size());
-
+    // if (FilterInUse->Selected.Exists()) {
+    //     rl::DrawMeshInstanced(SatModel, SelectedMaterial, FilterInUse->Selected.TransformBuffer,
+    //                           FilterInUse->Selected.Size());
+    // }
 
     newmat = rl::MatrixScale(1.0, 1.0, 1.0);
-    // rl::rlDisableBackfaceCulling();
     rl::BeginBlendMode(rl::BLEND_ADDITIVE);
     rl::DrawMeshInstanced(AtmosphereModel, AtmosphereMaterial, &newmat, 1);
     rl::EndBlendMode();
-    // rl::rlEnableBackfaceCulling();
 
 
     rl::EndMode3D();
 
     DrawText(String::Fmt("Frame\t{}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 10, 10, 20);
     DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 10, 30, 14);
-    DrawText(String::Fmt("Satellites\t{}", TmpDataset.Size()), 10, 45, 14);
+    DrawText(String::Fmt("Satellites\t{}", FilterInUse->GetSatelliteCount()), 10, 45, 14);
     DrawText(String::Fmt("Picked\t{}", PickedSatellite ? PickedSatellite->Series.CStr() : "None"), 10, 60, 14);
 
     rl::EndDrawing();

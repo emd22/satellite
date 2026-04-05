@@ -32,7 +32,7 @@ public:
         return Position;
     }
 
-    void UpdatePosition(uint32 frame_count, float32 delta_time) { Position += Movement; }
+    void UpdatePosition() { Position += Movement; }
 
     void CalculateMoveSpeed(uint32 lerp_frames)
     {
