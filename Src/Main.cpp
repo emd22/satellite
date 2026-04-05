@@ -28,7 +28,7 @@ namespace rl {
 #include "Vec3.hpp"
 
 /// The number of frames it takes for a satellite to reach its destination.
-static constexpr uint32 scNumLerpFrames = 40;
+static constexpr uint32 scNumLerpFrames = 250;
 
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
@@ -37,10 +37,15 @@ static constexpr uint32 scNumLerpFrames = 40;
 
 static constexpr float32 scMouseSensitivity = 0.005f;
 
-static constexpr float cPoleLimitOffset = 0.005;
-static constexpr float cDefaultZoom = 10.0f;
-static constexpr float cSinglePointZoom = 2.0f;
+static constexpr float32 cPoleLimitOffset = 0.005;
+static constexpr float32 cDefaultZoom = 10.0f;
+static constexpr float32 cSinglePointZoom = 2.0f;
 
+static constexpr float32 scUIPaddingHorizontal = 20;
+static constexpr float32 scUIPaddingVertical = 10;
+
+static constexpr float32 scUIGridHorizontalSplits = 24;
+static constexpr float32 scUIGridVerticalSplits = 32;
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
 
@@ -58,14 +63,14 @@ public:
     void Step(int32 by);
     void UpdateTransformations(bool warp_to = false);
 
-    void DrawText(const String& text, float32 x, float32 y, float32 size);
+    void DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size);
     void UpdateSatellites();
     rl::Vector3 GetSunPosition() { return SunPos.ToRL(); }
     Satellite* CheckForSatPicking();
     void SelectSatellite(Satellite* selection);
     void SetCameraTarget(const Vec3r& target);
 
-    bool IsDefaultFilter() const { return (FilterInUse == &DefaultFilter); }
+    bool IsDefaultFilter() const { return (pFilterInUse == &DefaultFilter); }
 
     ~Simulation();
 
@@ -88,7 +93,7 @@ public:
 
     NormalFilter DefaultFilter;
     SelectionFilter SelectedFilter;
-    BaseFilter* FilterInUse = &DefaultFilter;
+    BaseFilter* pFilterInUse = &DefaultFilter;
 
     Vec3r CameraPosition = Vec3r::sZero;
     Vec3r CameraCenter = Vec3r::sZero;
@@ -102,6 +107,9 @@ public:
     double AngleX = 0.01;
     double AngleY = 0.01;
 
+    float32 UICellSizeX = 1.0f;
+    float32 UICellSizeY = 1.0f;
+
     rl::Camera Camera {};
 
     rl::Mesh SatModel;
@@ -111,7 +119,7 @@ public:
     rl::Model SunModel;
     rl::Font Font;
 
-    Satellite* PickedSatellite = nullptr;
+    Satellite* pPickedSatellite = nullptr;
 
     Vec3r SunPos = Vec3r { 100.0f, 50.0f, 0.0f };
 
@@ -122,7 +130,7 @@ public:
     bool bAnimateTimeFrames = false;
 };
 
-void Simulation::UpdateSatellites() { FilterInUse->UpdateSatellites({}, false); }
+void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
 
 
 Simulation::Simulation() {}
@@ -209,8 +217,13 @@ void Simulation::SetCameraTarget(const Vec3r& target)
 
 void Simulation::InitGraphics()
 {
-    rl::InitWindow(900, 900, "Space");
+    int window_width = 900;
+    int window_height = 900;
 
+    rl::InitWindow(window_width, window_height, "Satellite Visualization");
+
+    UICellSizeX = (float32(window_width) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
+    UICellSizeY = (float32(window_height) - scUIPaddingVertical) / scUIGridVerticalSplits;
 
     // Load font
     Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 32, 0, 250);
@@ -332,7 +345,8 @@ void Simulation::SelectSatellite(Satellite* selected)
         AngleX = SavedAngleX;
         AngleY = SavedAngleY;
 
-        FilterInUse = &DefaultFilter;
+        pFilterInUse = &DefaultFilter;
+        pPickedSatellite = nullptr;
 
         return;
     }
@@ -350,7 +364,9 @@ void Simulation::SelectSatellite(Satellite* selected)
     }
 
     SelectedFilter.Finalize();
-    FilterInUse = &SelectedFilter;
+    pFilterInUse = &SelectedFilter;
+
+    SelectedFilter.pPickedSatellite = selected;
 
     SetCameraTarget(selected->Position);
 
@@ -370,7 +386,7 @@ Simulation::~Simulation()
 
 void Simulation::UpdateTransformations(bool warp_to)
 {
-    FilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), warp_to);
+    pFilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), warp_to);
 
     // for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
     //     Satellite* sat = FilterInUse->Unselected.Satellites[i];
@@ -425,9 +441,12 @@ void Simulation::CheckControls()
     }
 }
 
-void Simulation::DrawText(const String& text, float32 x, float32 y, float32 size)
+void Simulation::DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size)
 {
-    rl::DrawTextEx(Font, text.CStr(), rl::Vector2 { x, y }, float32(size), 2, rl::WHITE);
+    rl::DrawTextEx(Font, text.CStr(),
+                   rl::Vector2 { float32(cell_x) * UICellSizeX + (scUIPaddingHorizontal / 2.0f),
+                                 float32(cell_y) * UICellSizeY + (scUIPaddingVertical / 2.0f) },
+                   float32(size), 2, rl::WHITE);
 }
 
 
@@ -437,6 +456,11 @@ void Simulation::Render()
 
     if (bAnimateTimeFrames) {
         UpdateSatellites();
+
+
+        if (pPickedSatellite) {
+            SetCameraTarget(pPickedSatellite->Position);
+        }
     }
 
     if (bAnimateTimeFrames && !(FrameCount % scNumLerpFrames)) {
@@ -496,8 +520,8 @@ void Simulation::Render()
     if (rl::IsMouseButtonReleased(rl::MOUSE_LEFT_BUTTON) && mouse_pressed) {
         Satellite* sat = CheckForSatPicking();
 
-        PickedSatellite = sat;
-        SelectSatellite(PickedSatellite);
+        pPickedSatellite = sat;
+        SelectSatellite(pPickedSatellite);
 
         mouse_pressed = false;
     }
@@ -518,7 +542,7 @@ void Simulation::Render()
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
-    FilterInUse->RenderSatellites(SatModel, SatMaterial);
+    pFilterInUse->RenderSatellites(SatModel, SatMaterial);
 
     // if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
     //     rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
@@ -538,10 +562,17 @@ void Simulation::Render()
 
     rl::EndMode3D();
 
-    DrawText(String::Fmt("Frame\t{}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 10, 10, 20);
-    DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 10, 30, 14);
-    DrawText(String::Fmt("Satellites\t{}", FilterInUse->GetSatelliteCount()), 10, 45, 14);
-    DrawText(String::Fmt("Picked\t{}", PickedSatellite ? PickedSatellite->Series.CStr() : "None"), 10, 60, 14);
+    DrawText(String::Fmt("Frame {}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 0, 0, 32);
+    DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 0, 2, 20);
+    DrawText(String::Fmt("Count {} / {}", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount()), 0, 3,
+             20);
+
+    if (pPickedSatellite) {
+        uint32 picked_x = 14;
+        DrawText(String::Fmt("Series {} - Id {}", pPickedSatellite->Series.CStr(), pPickedSatellite->Identifier.CStr()),
+                 picked_x, 0, 20);
+    }
+
 
     rl::EndDrawing();
 
