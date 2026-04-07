@@ -60,7 +60,7 @@ public:
     void CheckControls();
     void Render();
 
-    void Step(int32 by);
+    void Step(int32 by, bool warp = false);
     void UpdateTransformations(bool warp_to = false);
 
     void DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size);
@@ -120,6 +120,9 @@ public:
     rl::Model SunModel;
     rl::Font Font;
 
+    uint32 WindowWidth = 0;
+    uint32 WindowHeight = 0;
+
     Satellite* pPickedSatellite = nullptr;
 
     Vec3r SunPos = Vec3r { 100.0f, 50.0f, 0.0f };
@@ -129,6 +132,7 @@ public:
 
 
     bool bAnimateTimeFrames = false;
+    bool bHideSatellites = false;
 };
 
 void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
@@ -140,16 +144,7 @@ Satellite* Simulation::CheckForSatPicking()
 {
     rl::Ray ray = rl::GetScreenToWorldRay(rl::GetMousePosition(), Camera);
 
-    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
-        Satellite& sat = TmpDataset.GetSatellite(i);
-        rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat.Position.ToRL(), 0.01f);
-
-        if (sphere_hit.hit) {
-            return &sat;
-        }
-    }
-
-    return nullptr;
+    return pFilterInUse->RaycastToSatellite(ray);
 }
 
 rl::Color HSVToRGB(float32 H, float32 S, float32 V)
@@ -228,27 +223,32 @@ void Simulation::UpdateLerpSpeed(uint32 lerp_frames)
 
 void Simulation::InitGraphics()
 {
-    int window_width = 900;
-    int window_height = 900;
+    WindowWidth = 900;
+    WindowHeight = 900;
 
-    rl::InitWindow(window_width, window_height, "Satellite Visualization");
+    rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
+    rl::InitWindow(WindowWidth, WindowHeight, "Satellite Visualization");
 
-    UICellSizeX = (float32(window_width) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
-    UICellSizeY = (float32(window_height) - scUIPaddingVertical) / scUIGridVerticalSplits;
+    UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
+    UICellSizeY = (float32(WindowHeight) - scUIPaddingVertical) / scUIGridVerticalSplits;
 
     // Load font
     Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 64, 0, 250);
 
     UpdateTransformations();
 
+    DefaultFilter.Create(TmpDataset.Size() + 1);
+
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
         sat.CalculateMoveSpeed(sNumLerpFrames);
 
+        sat.MoveToTimeStep(0, true);
+
         DefaultFilter.AddSatellite(sat, GenerateRandomColor(sat.Series.GetHash()));
     }
 
-    DefaultFilter.Finalize();
+    DefaultFilter.Finalize(SatModel, SatMaterial.shader);
 
     Earth = rl::LoadModel(ASSET_BASE_DIR "/Earth.glb");
     Skybox = rl::LoadModel(ASSET_BASE_DIR "/Skybox.glb");
@@ -283,6 +283,7 @@ void Simulation::InitGraphics()
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
         SatLit.locs[rl::SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(SatLit, "instanceTransform");
+        // SatLit.locs[rl::SHADER_LOC_COLOR_DIFFUSE] = GetShaderLocationAttrib(SatLit, "vertexColor");
 
         // Set shader value: ambient light level
         int ambientLoc = GetShaderLocation(SatLit, "ambient");
@@ -337,7 +338,7 @@ void Simulation::InitGraphics()
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
-    rl::SetTargetFPS(120);
+    rl::SetTargetFPS(0);
 }
 
 
@@ -416,20 +417,17 @@ void Simulation::UpdateTransformations(bool warp_to)
     // }
 }
 
-void Simulation::Step(int32 by)
+void Simulation::Step(int32 by, bool warp)
 {
     if (int32(TimeFrameIndex) + by < 0) {
         TimeFrameIndex = scNumTimeCaptures - 1;
     }
-    else if (int32(TimeFrameIndex) + by >= scNumTimeCaptures) {
+    else if (int32(TimeFrameIndex) + by >= scNumTimeCaptures - 1) {
         TimeFrameIndex = 0;
     }
     else {
         TimeFrameIndex += by;
     }
-
-
-    bool warp = false;
 
     if (TimeFrameIndex == 0) {
         warp = true;
@@ -441,10 +439,10 @@ void Simulation::Step(int32 by)
 void Simulation::CheckControls()
 {
     if (rl::IsKeyPressed(rl::KEY_PERIOD)) { // Greater than symbol
-        Step(1);
+        Step(1, true);
     }
     else if (rl::IsKeyPressed(rl::KEY_COMMA)) {
-        Step(-1);
+        Step(-1, true);
     }
 
     if (rl::IsKeyPressed(rl::KEY_EQUAL) && sNumLerpFrames > 10) {
@@ -454,8 +452,16 @@ void Simulation::CheckControls()
         UpdateLerpSpeed(sNumLerpFrames + 15);
     }
 
-    if (rl::IsKeyPressed(rl::KEY_P)) {
+    if (rl::IsKeyPressed(rl::KEY_SPACE)) {
         bAnimateTimeFrames = !bAnimateTimeFrames;
+    }
+
+    if (rl::IsKeyPressed(rl::KEY_H)) {
+        bHideSatellites = !bHideSatellites;
+    }
+
+    if (rl::IsKeyPressed(rl::KEY_I) && rl::IsKeyDown(rl::KEY_LEFT_SHIFT)) {
+        SelectedFilter.bShowInactive = !SelectedFilter.bShowInactive;
     }
 }
 
@@ -470,6 +476,13 @@ void Simulation::DrawText(const String& text, int32 cell_x, int32 cell_y, float3
 
 void Simulation::Render()
 {
+    if (rl::GetScreenWidth() != WindowWidth || rl::GetScreenHeight() != WindowHeight) {
+        WindowWidth = rl::GetScreenWidth();
+        WindowHeight = rl::GetScreenHeight();
+        UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
+        UICellSizeY = (float32(WindowHeight) - scUIPaddingVertical) / scUIGridVerticalSplits;
+    }
+
     static bool mouse_pressed = false;
 
     if (bAnimateTimeFrames) {
@@ -560,7 +573,9 @@ void Simulation::Render()
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
-    pFilterInUse->RenderSatellites(SatModel, SatMaterial);
+    if (!bHideSatellites) {
+        pFilterInUse->RenderSatellites(SatModel, SatMaterial);
+    }
 
     // if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
     //     rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
@@ -586,9 +601,15 @@ void Simulation::Render()
              20);
 
     if (pPickedSatellite) {
-        uint32 picked_x = 14;
+        uint32 picked_x = 8;
         DrawText(String::Fmt("Series {} - Id {}", pPickedSatellite->Series.CStr(), pPickedSatellite->Identifier.CStr()),
                  picked_x, 0, 20);
+
+        DrawText(String::Fmt("Position {:.04f} {:.04f} {:.04f}", pPickedSatellite->Position.X,
+                             pPickedSatellite->Position.Y, pPickedSatellite->Position.Z),
+                 picked_x, 1, 14);
+
+        DrawText(String::Fmt("Launched in '{:02}", pPickedSatellite->LaunchYear), picked_x, 2, 14);
     }
 
 

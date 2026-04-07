@@ -52,7 +52,7 @@ Satellite::TimeStep TleContext::GetTimeStepForTime(double time)
     SGP4Funcs::sgp4(SatRec, time, pos_buffer, vel_buffer);
 
     // Convert the double precision results into our real number type in the vector
-    force.Position = Vec3r(pos_buffer);
+    force.Position = Vec3r(pos_buffer[0], pos_buffer[2], pos_buffer[1]);
 
     return force;
 }
@@ -120,6 +120,15 @@ static void SetNamesForSatellite(const std::string& name_line, Satellite& sat)
     sat.Identifier = String(ident_start, i);
 }
 
+uint32 CharToNumber(char ch)
+{
+    if (ch < '0') {
+        return 0;
+    }
+
+    return uint32(ch - '0');
+}
+
 
 void Dataset::LoadFromTLE(const String& tle_path)
 {
@@ -165,6 +174,8 @@ void Dataset::LoadFromTLE(const String& tle_path)
         }
 
         SetNamesForSatellite(name_line, sat);
+
+        sat.LaunchYear = CharToNumber(line1[9]) * 10 + CharToNumber(line1[10]);
 
         Satellites.push_back(sat);
     }

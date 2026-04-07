@@ -18,7 +18,7 @@ add_definitions(
 
 if (APPLE)
 	add_compile_options(
-		-g
+		-O2
 		# -fsanitize=address
 	)
 

@@ -21,10 +21,10 @@ public:
     {
         Position = GoalPosition;
 
-        GoalPosition = GetTimeStep(time_step).Position;
+        GoalPosition = GetTimeStep(time_step + 1).Position;
 
         if (warp_to) {
-            Position = GoalPosition;
+            Position = GetTimeStep(time_step).Position;
         }
 
         Movement = (GoalPosition - Position) / LerpFrames;
@@ -44,6 +44,8 @@ public:
     Vec3r Position = Vec3r::sZero;
     Vec3r GoalPosition = Vec3r::sZero;
     Vec3r Movement = Vec3r::sZero;
+
+    uint16 LaunchYear = 0;
 
     uint32 LerpFrames = 10;
 
