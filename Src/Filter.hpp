@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Mem.hpp"
+#include "RenderHelpers.hpp"
 #include "Satellite.hpp"
 
 #include <optional>
+
 
 namespace rl {
 
@@ -65,7 +67,7 @@ public:
             // material.maps[rl::MATERIAL_MAP_DIFFUSE].color = Color;
 
             if (Exists()) {
-                rl::DrawMeshInstanced(sat_model, material, TransformBuffer, Size());
+                Render::DrawMeshInstanced_Colors(sat_model, material, TransformBuffer, ColorBuffer, Size());
             }
         }
 
@@ -76,6 +78,7 @@ public:
 
         std::vector<Satellite*> Satellites;
         rl::Matrix* TransformBuffer = nullptr;
+        rl::Color* ColorBuffer = nullptr;
 
         Hash32 SeriesHash = HashNull32;
 
@@ -94,6 +97,12 @@ public:
 class SelectionFilter : public BaseFilter
 {
 public:
+    void Create(uint32 size)
+    {
+        Selected.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
+        Unselected.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
+    }
+
     void Finalize() override
     {
         Unselected.Finalize();
@@ -106,29 +115,45 @@ public:
         Unselected.UpdateSatellites(use_timestep, warp_to);
     }
 
+
+    void AddSatellite(Satellite& sat, rl::Color color, bool selected)
+    {
+        if (selected) {
+            Selected.Satellites.push_back(&sat);
+
+            rl::Color& vc = Selected.ColorBuffer[Selected.Size() - 1];
+            vc = color;
+        }
+        else {
+            Unselected.Satellites.push_back(&sat);
+
+            rl::Color& vc = Selected.ColorBuffer[Unselected.Size() - 1];
+            vc = color;
+        }
+    }
+
     void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) override
     {
         rl::Color default_color = material.maps[rl::MATERIAL_MAP_DIFFUSE].color;
 
         if (bShowInactive) {
             Unselected.RenderSatellites(sat_model, material);
-            material.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(200, 165, 0), 255);
             Selected.RenderSatellites(sat_model, material);
         }
         else {
-            material.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(200, 165, 0), 255);
             Selected.RenderSatellites(sat_model, material);
         }
 
         if (pPickedSatellite) {
-            material.maps[rl::MATERIAL_MAP_DIFFUSE].color = rl::ColorAlpha(rl::Color(200, 0, 0), 100);
-
             const rl::Vector3 pos = pPickedSatellite->Position.ToRL();
             rl::Matrix matrix = rl::MatrixMultiply(rl::MatrixScale(3.0, 3.0, 3.0),
                                                    rl::MatrixTranslate(pos.x, pos.y, pos.z));
 
             rl::BeginBlendMode(rl::BLEND_ADDITIVE);
-            rl::DrawMeshInstanced(sat_model, material, &matrix, 1);
+            // rl::DrawMeshInstanced(sat_model, material, &matrix, 1);
+            rl::Color picked_color = rl::ColorAlpha(rl::Color(150, 0, 0), 255);
+            Render::DrawMeshInstanced_Colors(sat_model, material, &matrix, &picked_color, 1);
+
             rl::EndBlendMode();
         }
 
@@ -167,38 +192,22 @@ class NormalFilter : public BaseFilter
 public:
     void Create(uint32 size)
     {
-        if (ColorBuffer != nullptr) {
-            ColorBuffer = Mem::Realloc<rl::Vector4>(ColorBuffer, size * sizeof(rl::Vector4));
+        if (Sats.ColorBuffer != nullptr) {
+            Sats.ColorBuffer = Mem::Realloc<rl::Color>(Sats.ColorBuffer, size * sizeof(rl::Color));
         }
         else {
-            ColorBuffer = Mem::Alloc<rl::Vector4>(size * sizeof(rl::Vector4));
+            Sats.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
         }
     }
 
-    void Finalize(const rl::Mesh& sat_model, rl::Shader shader)
-    {
-        Sats.Finalize();
-
-        // int colorLoc = GetShaderLocationAttrib(shader, "instanceColor");
-
-        // unsigned int colorVboId = rlLoadVertexBuffer(ColorBuffer, Sats.Size() * sizeof(rl::Vector4), false);
-
-        // rl::rlEnableVertexArray(sat_model.vaoId);
-        // rl::rlEnableVertexAttribute(colorLoc);
-        // rl::rlSetVertexAttribute(colorLoc, 4, RL_UNSIGNED_BYTE, true, 0, 0);
-        // rl::rlSetVertexAttributeDivisor(colorLoc, 1);
-        // rl::rlDisableVertexArray();
-    }
+    void Finalize(const rl::Mesh& sat_model, rl::Shader shader) { Sats.Finalize(); }
 
     void AddSatellite(Satellite& sat, rl::Color color)
     {
         Sats.Satellites.push_back(&sat);
 
-        rl::Vector4& vc = ColorBuffer[Sats.Size() - 1];
-        vc.x = 255.0f;
-        vc.y = 255.0;
-        vc.z = 255.0;
-        vc.w = 255.0f;
+        rl::Color& vc = Sats.ColorBuffer[Sats.Size() - 1];
+        vc = color;
     }
 
     void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to = false) override
@@ -230,11 +239,6 @@ public:
 
 public:
     Component Sats;
-
-    rl::Vector4* ColorBuffer = nullptr;
-
-    uint32 TransformVBO;
-    uint32 ColorVBO;
 };
 
 

@@ -35,7 +35,7 @@ static uint32 sNumLerpFrames = 250;
 // Earth 3D model has been taken from the NASA website
 
 
-static constexpr float32 scZoomSensitivity = 10.0f ;
+static constexpr float32 scZoomSensitivity = 10.0f;
 static constexpr float32 scMouseSensitivity = 0.005f;
 
 static constexpr float32 cPoleLimitOffset = 0.005;
@@ -73,6 +73,9 @@ public:
 
     bool IsDefaultFilter() const { return (pFilterInUse == &DefaultFilter); }
     void UpdateLerpSpeed(uint32 lerp_frames);
+
+    rl::Color GetSatColor(Hash32 series_hash);
+
 
     ~Simulation();
 
@@ -134,6 +137,8 @@ public:
 
     bool bAnimateTimeFrames = false;
     bool bHideSatellites = false;
+
+    std::unordered_map<Hash32, rl::Color, Hash32Stl> ColorMap;
 };
 
 void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
@@ -187,23 +192,26 @@ rl::Color HSVToRGB(float32 H, float32 S, float32 V)
     color.r = r * 255;
     color.g = g * 255;
     color.b = b * 255;
+    color.a = 255;
 
     return color;
 }
 
-static rl::Color GenerateRandomColor(Hash32 series_hash)
+rl::Color Simulation::GetSatColor(Hash32 series_hash)
 {
-    static uint32 seed = 0;
-    if (seed == series_hash) {
-        return rl::WHITE;
+    auto it = ColorMap.find(series_hash);
+
+    if (it != ColorMap.end()) {
+        return it->second;
     }
 
-    srand(series_hash);
-    seed = series_hash;
 
-    float32 hue = float32(rand() % 100);
+    float32 hue = float32(rand() % 360);
 
-    return HSVToRGB(hue, 70, 100);
+    rl::Color color = HSVToRGB(hue, 40, 100);
+    ColorMap[series_hash] = color;
+
+    return color;
 }
 
 void Simulation::SetCameraTarget(const Vec3r& target)
@@ -227,6 +235,8 @@ void Simulation::InitGraphics()
     WindowWidth = 900;
     WindowHeight = 900;
 
+    srand(time(NULL));
+
     rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
     rl::InitWindow(WindowWidth, WindowHeight, "Satellite Visualization");
 
@@ -239,6 +249,7 @@ void Simulation::InitGraphics()
     UpdateTransformations();
 
     DefaultFilter.Create(TmpDataset.Size() + 1);
+    SelectedFilter.Create(TmpDataset.Size() + 1);
 
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
@@ -246,7 +257,7 @@ void Simulation::InitGraphics()
 
         sat.MoveToTimeStep(0, true);
 
-        DefaultFilter.AddSatellite(sat, GenerateRandomColor(sat.Series.GetHash()));
+        DefaultFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()));
     }
 
     DefaultFilter.Finalize(SatModel, SatMaterial.shader);
@@ -285,7 +296,7 @@ void Simulation::InitGraphics()
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
         SatLit.locs[rl::SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(SatLit, "instanceTransform");
-        // SatLit.locs[rl::SHADER_LOC_COLOR_DIFFUSE] = GetShaderLocationAttrib(SatLit, "vertexColor");
+        SatLit.locs[rl::SHADER_LOC_VERTEX_COLOR] = GetShaderLocationAttrib(SatLit, "instanceColor");
 
         // Set shader value: ambient light level
         int ambientLoc = GetShaderLocation(SatLit, "ambient");
@@ -370,10 +381,12 @@ void Simulation::SelectSatellite(Satellite* selected)
 
     for (Satellite& sat : TmpDataset.Satellites) {
         if (sat.Series.GetHash() == selected->Series.GetHash()) {
-            SelectedFilter.Selected.Satellites.push_back(&sat);
+            // SelectedFilter.Selected.Satellites.push_back(&sat);
+            SelectedFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()), true);
         }
         else {
-            SelectedFilter.Unselected.Satellites.push_back(&sat);
+            // SelectedFilter.Unselected.Satellites.push_back(&sat);
+            SelectedFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()), false);
         }
     }
 
@@ -530,7 +543,7 @@ void Simulation::Render()
     if (abs(zoom_movement) > 0.005f) {
         float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
 
-        Zoom += zoom_movement * ((scZoomSensitivity  * distance_to_planet)) * rl::GetFrameTime();
+        Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
     }
 
     if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {

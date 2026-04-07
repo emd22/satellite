@@ -42,4 +42,11 @@ endif()
 
 add_executable(space ${SOURCES} ${HEADERS})
 
-target_link_libraries(space winmm raylib )
+set (LIBS raylib)
+
+if (MSVC)
+    set (LIBS ${LIBS} winmm raylib)
+
+endif()
+
+target_link_libraries(space ${LIBS})
