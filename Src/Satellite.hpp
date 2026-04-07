@@ -3,6 +3,8 @@
 #include "String.hpp"
 #include "Vec3.hpp"
 
+#include <vector>
+
 struct Satellite
 {
 public:

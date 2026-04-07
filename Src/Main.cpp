@@ -35,6 +35,7 @@ static uint32 sNumLerpFrames = 250;
 // Earth 3D model has been taken from the NASA website
 
 
+static constexpr float32 scZoomSensitivity = 10.0f ;
 static constexpr float32 scMouseSensitivity = 0.005f;
 
 static constexpr float32 cPoleLimitOffset = 0.005;
@@ -257,6 +258,8 @@ void Simulation::InitGraphics()
     SatModel = rl::GenMeshSphere(0.005f, 6.0f, 6.0f);
     AtmosphereModel = rl::GenMeshSphere(3.0f, 24.0f, 24.0f);
 
+    float ambient_color[4] = { 0.2f, 0.2f, 0.2f, 1.0f };
+
 
     { // Load Atmosphere shader
         AtmosphereShader = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
@@ -269,8 +272,7 @@ void Simulation::InitGraphics()
 
         // Set shader value: ambient light level
         int ambientLoc = rl::GetShaderLocation(AtmosphereShader, "ambient");
-        rl::SetShaderValue(AtmosphereShader, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 0.1f },
-                           rl::SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(AtmosphereShader, ambientLoc, ambient_color, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
         rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
@@ -287,7 +289,7 @@ void Simulation::InitGraphics()
 
         // Set shader value: ambient light level
         int ambientLoc = GetShaderLocation(SatLit, "ambient");
-        rl::SetShaderValue(SatLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(SatLit, ambientLoc, ambient_color, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
         rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
@@ -304,7 +306,7 @@ void Simulation::InitGraphics()
 
         // Set shader value: ambient light level
         int ambientLoc = rl::GetShaderLocation(EarthLit, "ambient");
-        rl::SetShaderValue(EarthLit, ambientLoc, (float[4]) { 0.2f, 0.2f, 0.2f, 1.0f }, rl::SHADER_UNIFORM_VEC4);
+        rl::SetShaderValue(EarthLit, ambientLoc, ambient_color, rl::SHADER_UNIFORM_VEC4);
 
         // Create one light
         rl::CreateLight(rl::LIGHT_DIRECTIONAL, GetSunPosition(), rl::Vector3Zero(), rl::Color { 230, 180, 130 },
@@ -338,7 +340,7 @@ void Simulation::InitGraphics()
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
-    rl::SetTargetFPS(0);
+    rl::SetTargetFPS(60);
 }
 
 
@@ -528,7 +530,7 @@ void Simulation::Render()
     if (abs(zoom_movement) > 0.005f) {
         float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
 
-        Zoom += zoom_movement * ((0.005 * distance_to_planet));
+        Zoom += zoom_movement * ((scZoomSensitivity  * distance_to_planet)) * rl::GetFrameTime();
     }
 
     if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {

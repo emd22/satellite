@@ -28,15 +28,18 @@ if (APPLE)
 endif()
 
 if(MSVC)
-	add_compile_options("/MP" "/Oi" "/arch:AVX2")
+	add_compile_options("")
 endif()
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/Src
 )
-
+if(MSVC)
+link_directories(${CMAKE_SOURCE_DIR}/Lib/Windows)
+else()
 link_directories(${CMAKE_SOURCE_DIR}/Lib)
+endif()
 
 add_executable(space ${SOURCES} ${HEADERS})
 
-target_link_libraries(space raylib)
+target_link_libraries(space winmm raylib )

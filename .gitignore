@@ -1,18 +1,31 @@
 build
 build/**/*
-.cache/**/*
-a.out
+compile_commands.json
+*.bin
+
+# build stuff
+CMakeFiles
 CMakeCache.txt
 cmake_install.cmake
 Makefile
-compile_commands.json
-Cache.bin
-CMakeFiles
 
+*.vcxproj
+*.vcxproj.*
+space.slnx
+space.sln
+
+# executables
+space
+
+
+# cache + editor files
 .DS_Store
-
+.cache/**/*
 .*
 
-# Things excluded from the gitignore
+# ALL_BUILD and space.dir (windows)
+*.dir
+
+# exclusions
 !.gitignore
 !.clang*
