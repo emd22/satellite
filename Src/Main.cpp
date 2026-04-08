@@ -28,8 +28,7 @@ namespace rl {
 #include "Vec3.hpp"
 
 /// The number of frames it takes for a satellite to reach its destination.
-static uint32 sNumLerpFrames = 250;
-
+static uint32 sNumLerpFrames = 240;
 
 // Stars and solar system textures taken from https://www.solarsystemscope.com/textures/, based off of NASA images.
 // Earth 3D model has been taken from the NASA website
@@ -76,6 +75,9 @@ public:
 
     rl::Color GetSatColor(Hash32 series_hash);
 
+    void DisplayControls();
+    void DisplayControlsSelected();
+    void DisplayControlsDefault();
 
     ~Simulation();
 
@@ -134,12 +136,43 @@ public:
 
     uint64 FrameCount = 0;
 
-
     bool bAnimateTimeFrames = false;
     bool bHideSatellites = false;
 
     std::unordered_map<Hash32, rl::Color, Hash32Stl> ColorMap;
 };
+
+void Simulation::DisplayControls()
+{
+    if (pPickedSatellite) {
+        DisplayControlsSelected();
+        return;
+    }
+    else {
+        DisplayControlsDefault();
+    }
+}
+
+void Simulation::DisplayControlsSelected()
+{
+    DrawText("[LCLICK] - Select Satellite", 0, scUIGridVerticalSplits - 2, 14);
+    DrawText("[ESCAPE] - Globe View", 8, scUIGridVerticalSplits - 2, 14);
+    DrawText(String::Fmt("[I] - {} Unselected", SelectedFilter.bShowInactive ? "Hide" : "Show"), 16,
+             scUIGridVerticalSplits - 2, 14);
+
+    DrawText(String::Fmt("[SPACE]  - {} Animation", bAnimateTimeFrames ? "Pause" : "Play"), 0,
+             scUIGridVerticalSplits - 1, 14);
+    DrawText("[COMMA, PERIOD] - Next/Prev Frame", 8, scUIGridVerticalSplits - 1, 14);
+}
+
+void Simulation::DisplayControlsDefault()
+{
+    DrawText("[LCLICK] - Satellite Detail", 0, scUIGridVerticalSplits - 2, 14);
+
+    DrawText(String::Fmt("[SPACE]  - {} Animation", bAnimateTimeFrames ? "Pause" : "Play"), 0,
+             scUIGridVerticalSplits - 1, 14);
+    DrawText("[COMMA, PERIOD] - Prev/Next Frame", 8, scUIGridVerticalSplits - 1, 14);
+}
 
 void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
 
@@ -235,7 +268,6 @@ void Simulation::InitGraphics()
     WindowWidth = 900;
     WindowHeight = 900;
 
-    srand(time(NULL));
 
     rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
     rl::InitWindow(WindowWidth, WindowHeight, "Satellite Visualization");
@@ -351,29 +383,21 @@ void Simulation::InitGraphics()
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
-    rl::SetTargetFPS(60);
+    rl::SetTargetFPS(120);
+    rl::SetExitKey(rl::KEY_NULL);
 }
 
 
 void Simulation::SelectSatellite(Satellite* selected)
 {
+    if (!selected) {
+        return;
+    }
+
     if (IsDefaultFilter()) {
         SavedAngleX = AngleX;
         SavedAngleY = AngleY;
         SavedZoom = Zoom;
-    }
-
-    if (!selected) {
-        SetCameraTarget(Vec3r::sZero);
-        Zoom = SavedZoom;
-
-        AngleX = SavedAngleX;
-        AngleY = SavedAngleY;
-
-        pFilterInUse = &DefaultFilter;
-        pPickedSatellite = nullptr;
-
-        return;
     }
 
     SelectedFilter.Selected.Satellites.clear();
@@ -460,11 +484,13 @@ void Simulation::CheckControls()
         Step(-1, true);
     }
 
-    if (rl::IsKeyPressed(rl::KEY_EQUAL) && sNumLerpFrames > 10) {
-        UpdateLerpSpeed(sNumLerpFrames - 15);
+    static constexpr int32 scLerpStep = 12;
+
+    if (rl::IsKeyPressed(rl::KEY_EQUAL) && (int32(sNumLerpFrames) - scLerpStep) >= 10) {
+        UpdateLerpSpeed(sNumLerpFrames - scLerpStep);
     }
-    else if (rl::IsKeyPressed(rl::KEY_MINUS) && sNumLerpFrames < 300) {
-        UpdateLerpSpeed(sNumLerpFrames + 15);
+    else if (rl::IsKeyPressed(rl::KEY_MINUS) && (int32(sNumLerpFrames) + scLerpStep) <= 300) {
+        UpdateLerpSpeed(sNumLerpFrames + scLerpStep);
     }
 
     if (rl::IsKeyPressed(rl::KEY_SPACE)) {
@@ -475,8 +501,19 @@ void Simulation::CheckControls()
         bHideSatellites = !bHideSatellites;
     }
 
-    if (rl::IsKeyPressed(rl::KEY_I) && rl::IsKeyDown(rl::KEY_LEFT_SHIFT)) {
+    if (rl::IsKeyPressed(rl::KEY_I)) {
         SelectedFilter.bShowInactive = !SelectedFilter.bShowInactive;
+    }
+
+    if (rl::IsKeyPressed(rl::KEY_ESCAPE)) {
+        SetCameraTarget(Vec3r::sZero);
+        Zoom = SavedZoom;
+
+        AngleX = SavedAngleX;
+        AngleY = SavedAngleY;
+
+        pFilterInUse = &DefaultFilter;
+        pPickedSatellite = nullptr;
     }
 }
 
@@ -565,9 +602,10 @@ void Simulation::Render()
 
     if (rl::IsMouseButtonReleased(rl::MOUSE_LEFT_BUTTON) && mouse_pressed) {
         Satellite* sat = CheckForSatPicking();
-
-        pPickedSatellite = sat;
-        SelectSatellite(pPickedSatellite);
+        if (sat) {
+            pPickedSatellite = sat;
+            SelectSatellite(pPickedSatellite);
+        }
 
         mouse_pressed = false;
     }
@@ -588,9 +626,6 @@ void Simulation::Render()
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
-    if (!bHideSatellites) {
-        pFilterInUse->RenderSatellites(SatModel, SatMaterial);
-    }
 
     // if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
     //     rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
@@ -601,19 +636,29 @@ void Simulation::Render()
     //     rl::DrawMeshInstanced(SatModel, SelectedMaterial, FilterInUse->Selected.TransformBuffer,
     //                           FilterInUse->Selected.Size());
     // }
+    //
+    //
+
+
+    if (!bHideSatellites) {
+        pFilterInUse->RenderSatellites(SatModel, SatMaterial);
+    }
+
 
     newmat = rl::MatrixScale(1.0, 1.0, 1.0);
     rl::BeginBlendMode(rl::BLEND_ADDITIVE);
     rl::DrawMeshInstanced(AtmosphereModel, AtmosphereMaterial, &newmat, 1);
     rl::EndBlendMode();
 
-
     rl::EndMode3D();
+
+    DisplayControls();
 
     DrawText(String::Fmt("Frame {}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 0, 0, 32);
     DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 0, 2, 20);
     DrawText(String::Fmt("Count {} / {}", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount()), 0, 3,
              20);
+    DrawText(String::Fmt("Speed {:.00f}%", (1.0f - (float32(sNumLerpFrames - 10) / 290.0f)) * 100.0f), 0, 4, 20);
 
     if (pPickedSatellite) {
         uint32 picked_x = 8;

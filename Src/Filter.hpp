@@ -127,7 +127,7 @@ public:
         else {
             Unselected.Satellites.push_back(&sat);
 
-            rl::Color& vc = Selected.ColorBuffer[Unselected.Size() - 1];
+            rl::Color& vc = Unselected.ColorBuffer[Unselected.Size() - 1];
             vc = color;
         }
     }
