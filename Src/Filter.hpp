@@ -162,8 +162,23 @@ public:
 
     Satellite* RaycastToSatellite(rl::Ray& ray) override
     {
-        for (uint32 i = 0; i < Selected.Size(); i++) {
-            Satellite* sat = Selected.Satellites[i];
+        Satellite* sat = RaycastToComponent(Selected, ray);
+
+        if (bShowInactive && !sat) {
+            sat = RaycastToComponent(Unselected, ray);
+        }
+
+        return sat;
+    }
+
+
+    uint32 GetSatelliteCount() const override { return Selected.Size(); }
+
+private:
+    Satellite* RaycastToComponent(const Component& comp, rl::Ray& ray)
+    {
+        for (uint32 i = 0; i < comp.Size(); i++) {
+            Satellite* sat = comp.Satellites[i];
 
             rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat->Position.ToRL(), 0.02f);
 
@@ -171,12 +186,10 @@ public:
                 return sat;
             }
         }
+
+
         return nullptr;
     }
-
-
-    uint32 GetSatelliteCount() const override { return Selected.Size(); }
-
 
 public:
     Component Unselected;

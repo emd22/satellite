@@ -7,7 +7,7 @@ set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
 
-file (GLOB_RECURSE SOURCES "Src/*.cpp" "Src/*.inl")
+file (GLOB_RECURSE SOURCES "Src/*.cpp" "Src/*.c" "Src/*.mm" "Src/*.inl")
 file (GLOB_RECURSE HEADERS "Src/*.hpp" "Src/*.h" "Src/*.inl")
 
 add_definitions(
@@ -33,6 +33,9 @@ endif()
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/Src
+    ${CMAKE_SOURCE_DIR}/Src/ThirdParty
+    ${CMAKE_SOURCE_DIR}/Src/ThirdParty/imgui
+    ${CMAKE_SOURCE_DIR}/Src/ThirdParty/imgui/backends
 )
 if(MSVC)
 link_directories(${CMAKE_SOURCE_DIR}/Lib/Windows)
@@ -42,10 +45,10 @@ endif()
 
 add_executable(space ${SOURCES} ${HEADERS})
 
-set (LIBS raylib)
+set (LIBS raylib )
 
 if (MSVC)
-    set (LIBS ${LIBS} winmm raylib)
+    set (LIBS ${LIBS} winmm)
 
 endif()
 

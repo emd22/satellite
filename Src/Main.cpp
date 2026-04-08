@@ -16,7 +16,11 @@ namespace rl {
 #include "ThirdParty/rlgl.h"
 
 #define RLIGHTS_IMPLEMENTATION
+
 #include "ThirdParty/rlights.h"
+// Raylib + Imgui
+#include "rlImGui.hpp"
+
 
 } // namespace rl
 
@@ -26,6 +30,8 @@ namespace rl {
 #include "String.hpp"
 #include "Types.hpp"
 #include "Vec3.hpp"
+
+#include "ThirdParty/imgui/imgui.h"
 
 /// The number of frames it takes for a satellite to reach its destination.
 static uint32 sNumLerpFrames = 240;
@@ -79,6 +85,22 @@ public:
     void DisplayControlsSelected();
     void DisplayControlsDefault();
 
+    void DeselectSatellites();
+
+    void UpdateSpeed(bool forward)
+    {
+        static constexpr int32 scLerpStep = 12;
+
+        if (forward && (int32(sNumLerpFrames) - scLerpStep) >= 10) {
+            UpdateLerpSpeed(sNumLerpFrames - scLerpStep);
+        }
+        else if (!forward && (int32(sNumLerpFrames) + scLerpStep) <= 300) {
+            UpdateLerpSpeed(sNumLerpFrames + scLerpStep);
+        }
+    }
+
+    float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / 290.0f)) * 100.0f; }
+
     ~Simulation();
 
 
@@ -124,7 +146,9 @@ public:
 
     rl::Model Skybox;
     rl::Model SunModel;
-    rl::Font Font;
+    // rl::Font Font;
+    ImFont* FontNormal;
+    ImFont* FontLarge;
 
     uint32 WindowWidth = 0;
     uint32 WindowHeight = 0;
@@ -172,6 +196,18 @@ void Simulation::DisplayControlsDefault()
     DrawText(String::Fmt("[SPACE]  - {} Animation", bAnimateTimeFrames ? "Pause" : "Play"), 0,
              scUIGridVerticalSplits - 1, 14);
     DrawText("[COMMA, PERIOD] - Prev/Next Frame", 8, scUIGridVerticalSplits - 1, 14);
+}
+
+void Simulation::DeselectSatellites()
+{
+    SetCameraTarget(Vec3r::sZero);
+    Zoom = SavedZoom;
+
+    AngleX = SavedAngleX;
+    AngleY = SavedAngleY;
+
+    pFilterInUse = &DefaultFilter;
+    pPickedSatellite = nullptr;
 }
 
 void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
@@ -276,7 +312,8 @@ void Simulation::InitGraphics()
     UICellSizeY = (float32(WindowHeight) - scUIPaddingVertical) / scUIGridVerticalSplits;
 
     // Load font
-    Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 64, 0, 250);
+    // Font = rl::LoadFontEx(ASSET_BASE_DIR "/font.ttf", 96, 0, 250);
+
 
     UpdateTransformations();
 
@@ -385,6 +422,16 @@ void Simulation::InitGraphics()
 
     rl::SetTargetFPS(120);
     rl::SetExitKey(rl::KEY_NULL);
+
+    rl::rlImGuiSetup(true);
+
+
+    ImGuiIO& io = ImGui::GetIO();
+
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
+
+    FontNormal = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 16.0f);
+    FontLarge = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 32.0f);
 }
 
 
@@ -431,6 +478,8 @@ Simulation::~Simulation()
     rl::UnloadModel(Earth);
     rl::UnloadModel(Skybox);
     rl::UnloadModel(SunModel);
+
+    rl::rlImGuiShutdown();
 
     rl::CloseWindow();
 }
@@ -484,13 +533,12 @@ void Simulation::CheckControls()
         Step(-1, true);
     }
 
-    static constexpr int32 scLerpStep = 12;
 
-    if (rl::IsKeyPressed(rl::KEY_EQUAL) && (int32(sNumLerpFrames) - scLerpStep) >= 10) {
-        UpdateLerpSpeed(sNumLerpFrames - scLerpStep);
+    if (rl::IsKeyPressed(rl::KEY_EQUAL)) {
+        UpdateSpeed(true);
     }
-    else if (rl::IsKeyPressed(rl::KEY_MINUS) && (int32(sNumLerpFrames) + scLerpStep) <= 300) {
-        UpdateLerpSpeed(sNumLerpFrames + scLerpStep);
+    else if (rl::IsKeyPressed(rl::KEY_MINUS)) {
+        UpdateSpeed(false);
     }
 
     if (rl::IsKeyPressed(rl::KEY_SPACE)) {
@@ -506,23 +554,17 @@ void Simulation::CheckControls()
     }
 
     if (rl::IsKeyPressed(rl::KEY_ESCAPE)) {
-        SetCameraTarget(Vec3r::sZero);
-        Zoom = SavedZoom;
-
-        AngleX = SavedAngleX;
-        AngleY = SavedAngleY;
-
-        pFilterInUse = &DefaultFilter;
-        pPickedSatellite = nullptr;
+        DeselectSatellites();
     }
 }
 
 void Simulation::DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size)
 {
-    rl::DrawTextEx(Font, text.CStr(),
-                   rl::Vector2 { float32(cell_x) * UICellSizeX + (scUIPaddingHorizontal / 2.0f),
-                                 float32(cell_y) * UICellSizeY + (scUIPaddingVertical / 2.0f) },
-                   float32(size), 2, rl::WHITE);
+    // return;
+    // rl::DrawTextEx(Font, text.CStr(),
+    //                rl::Vector2 { float32(cell_x) * UICellSizeX + (scUIPaddingHorizontal / 2.0f),
+    //                              float32(cell_y) * UICellSizeY + (scUIPaddingVertical / 2.0f) },
+    //                float32(size), 2, rl::WHITE);
 }
 
 
@@ -576,40 +618,6 @@ void Simulation::Render()
     }
 
 
-    float zoom_movement = rl::GetMouseWheelMove();
-    if (abs(zoom_movement) > 0.005f) {
-        float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
-
-        Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
-    }
-
-    if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
-        rl::Vector2 mouse_delta = rl::GetMouseDelta();
-
-        float32 move_magnitude = abs(rl::Vector2Length(mouse_delta));
-
-        if (move_magnitude > 0.005f) {
-            AngleX += mouse_delta.x * scMouseSensitivity;
-            AngleY += mouse_delta.y * scMouseSensitivity;
-            mouse_pressed = false;
-        }
-    }
-
-    if (rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
-        mouse_pressed = true;
-    }
-
-
-    if (rl::IsMouseButtonReleased(rl::MOUSE_LEFT_BUTTON) && mouse_pressed) {
-        Satellite* sat = CheckForSatPicking();
-        if (sat) {
-            pPickedSatellite = sat;
-            SelectSatellite(pPickedSatellite);
-        }
-
-        mouse_pressed = false;
-    }
-
     rl::BeginDrawing();
 
     rl::ClearBackground(rl::BLACK);
@@ -654,26 +662,156 @@ void Simulation::Render()
 
     DisplayControls();
 
+    rl::rlImGuiBegin();
+
+    static constexpr ImGuiWindowFlags scWindowFlags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize |
+                                                      ImGuiWindowFlags_AlwaysAutoResize;
+    bool open = true;
+
+    ImGui::SetNextWindowSize(ImVec2(300, 500));
+
+    if (ImGui::Begin("Tools", nullptr, scWindowFlags)) {
+        ImGui::PushFont(FontNormal);
+        ImGui::PushFont(FontLarge);
+        ImGui::TextUnformatted(String::Fmt("Frame {}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps).CStr());
+        ImGui::PopFont();
+
+        if (ImGui::Button("<")) {
+            Step(-1, true);
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button(bAnimateTimeFrames ? "Pause" : "Play")) {
+            bAnimateTimeFrames = !bAnimateTimeFrames;
+        }
+        ImGui::SameLine();
+
+        if (ImGui::Button(">")) {
+            Step(1, true);
+        }
+
+        ImGui::SameLine();
+
+        ImGui::Dummy(ImVec2(20.0f, 00.0f));
+        ImGui::SameLine();
+
+
+        {
+            // Increase or decrease speed
+            if (ImGui::Button("-")) {
+                UpdateSpeed(false);
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(String::Fmt("{:.00f}%", GetSpeedPercent()).CStr());
+            ImGui::SameLine();
+
+            if (ImGui::Button("+")) {
+                UpdateSpeed(true);
+            }
+        }
+
+        ImGui::SeparatorText("Information");
+        {
+            ImGui::LabelText("Dataset", "%s", TmpDataset.Name.CStr());
+            ImGui::LabelText("Count", "%d / %d", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount());
+        }
+
+
+        ImGui::PopFont();
+    }
+    ImGui::End();
+
+    open = pPickedSatellite != nullptr;
+
+    ImGui::SetNextWindowSize(ImVec2(300, 350));
+    if (ImGui::Begin("Detail", nullptr, scWindowFlags)) {
+        ImGui::PushFont(FontNormal);
+        if (pPickedSatellite) {
+            ImGui::LabelText("Series", "%s", pPickedSatellite->Series.CStr());
+            ImGui::LabelText("Id", "%s", pPickedSatellite->Identifier.CStr());
+
+            // ImGui::TextUnformatted(String::Fmt("Series {}", pPickedSatellite->Series).CStr());
+            // ImGui::TextUnformatted(String::Fmt("Id {}", pPickedSatellite->Identifier).CStr());
+
+            auto& pos = pPickedSatellite->Position;
+            float pos_v[3] = { static_cast<float32>(pos.X), static_cast<float32>(pos.Y), static_cast<float32>(pos.Z) };
+            ImGui::InputFloat3("Position", pos_v);
+
+            if (ImGui::Button("Deselect", ImVec2(150, 25))) {
+                DeselectSatellites();
+            }
+        }
+        ImGui::PopFont();
+    }
+    ImGui::End();
+
+    open = true;
+
+
+    rl::rlImGuiEnd();
+
+
     DrawText(String::Fmt("Frame {}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 0, 0, 32);
     DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 0, 2, 20);
     DrawText(String::Fmt("Count {} / {}", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount()), 0, 3,
              20);
-    DrawText(String::Fmt("Speed {:.00f}%", (1.0f - (float32(sNumLerpFrames - 10) / 290.0f)) * 100.0f), 0, 4, 20);
+    // DrawText(String::Fmt("Speed {:.00f}%", , 0, 4, 20);
 
-    if (pPickedSatellite) {
-        uint32 picked_x = 8;
-        DrawText(String::Fmt("Series {} - Id {}", pPickedSatellite->Series.CStr(), pPickedSatellite->Identifier.CStr()),
-                 picked_x, 0, 20);
+    // if (pPickedSatellite) {
+    //     uint32 picked_x = 8;
+    //     DrawText(String::Fmt("Series {} - Id {}", pPickedSatellite->Series.CStr(),
+    //     pPickedSatellite->Identifier.CStr()),
+    //              picked_x, 0, 20);
 
-        DrawText(String::Fmt("Position {:.04f} {:.04f} {:.04f}", pPickedSatellite->Position.X,
-                             pPickedSatellite->Position.Y, pPickedSatellite->Position.Z),
-                 picked_x, 1, 14);
+    //     DrawText(String::Fmt("Position {:.04f} {:.04f} {:.04f}", pPickedSatellite->Position.X,
+    //                          pPickedSatellite->Position.Y, pPickedSatellite->Position.Z),
+    //              picked_x, 1, 14);
 
-        DrawText(String::Fmt("Launched in '{:02}", pPickedSatellite->LaunchYear), picked_x, 2, 14);
-    }
+    //     DrawText(String::Fmt("Launched in '{:02}", pPickedSatellite->LaunchYear), picked_x, 2, 14);
+    // }
 
 
     rl::EndDrawing();
+
+    ImGuiIO& imgui_io = ImGui::GetIO();
+
+    if (!ImGui::IsAnyItemHovered()) {
+        float zoom_movement = rl::GetMouseWheelMove();
+        if (abs(zoom_movement) > 0.005f) {
+            float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
+
+            Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
+        }
+
+        if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
+            rl::Vector2 mouse_delta = rl::GetMouseDelta();
+
+            float32 move_magnitude = abs(rl::Vector2Length(mouse_delta));
+
+            if (move_magnitude > 0.005f) {
+                AngleX += mouse_delta.x * scMouseSensitivity;
+                AngleY += mouse_delta.y * scMouseSensitivity;
+                mouse_pressed = false;
+            }
+        }
+
+        if (rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
+            mouse_pressed = true;
+        }
+
+
+        if (rl::IsMouseButtonReleased(rl::MOUSE_LEFT_BUTTON) && mouse_pressed) {
+            Satellite* sat = CheckForSatPicking();
+            if (sat) {
+                pPickedSatellite = sat;
+                SelectSatellite(pPickedSatellite);
+            }
+
+            mouse_pressed = false;
+        }
+    }
+
 
     ++FrameCount;
 }
