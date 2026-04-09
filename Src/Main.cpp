@@ -80,6 +80,7 @@ public:
     void UpdateSatellites();
     rl::Vector3 GetSunPosition() { return SunPos.ToRL(); }
     Satellite* CheckForSatPicking();
+    Satellite* FindSatelliteFromNorad(uint32 norad);
     void SelectSatellite(Satellite* selection);
     void SetCameraTarget(const Vec3r& target);
 
@@ -158,6 +159,9 @@ public:
     float32 UICellSizeX = 1.0f;
     float32 UICellSizeY = 1.0f;
 
+    uint32 NoradIdQuery = 0;
+
+
     rl::Camera Camera {};
 
     rl::Mesh SatModel;
@@ -188,6 +192,17 @@ public:
 
     std::unordered_map<Hash32, rl::Color, Hash32Stl> ColorMap;
 };
+
+Satellite* Simulation::FindSatelliteFromNorad(uint32 norad)
+{
+    for (Satellite& sat : TmpDataset.Satellites) {
+        if (sat.NoradId == norad) {
+            return &sat;
+        }
+    }
+
+    return nullptr;
+}
 
 void Simulation::DisplayControls()
 {
@@ -754,6 +769,15 @@ void Simulation::Render()
 
         ImGui::Checkbox("Show Debris", &pFilterInUse->bShowDebris);
         ImGui::Checkbox("Show Controls", &bShowControls);
+
+        ImGui::InputScalar("NORAD ID", ImGuiDataType_U32, &NoradIdQuery);
+        if (ImGui::Button("Select NORAD ID")) {
+            Satellite* found = FindSatelliteFromNorad(NoradIdQuery);
+            if (found) {
+                pPickedSatellite = found;
+                SelectSatellite(found);
+            }
+        }
 
         ImGui::PopFont();
     }
