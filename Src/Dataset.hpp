@@ -22,6 +22,8 @@ public:
     const Satellite& GetSatellite(uint32 index) const { return Satellites[index]; }
     Satellite& GetSatellite(uint32 index) { return Satellites[index]; }
 
+    void PopulateFromCatalog();
+
 public:
     String Name = "Unknown";
     uint32 NumTimesteps = 0;

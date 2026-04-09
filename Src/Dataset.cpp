@@ -36,7 +36,7 @@ void TleContext::CreateFromEntry(const char* line1, const char* line2)
     char* line1_buf = strdup(line1);
     char* line2_buf = strdup(line2);
 
-    SGP4Funcs::twoline2rv(line1_buf, line2_buf, 'c', 'e', 'i', wgs84, Mfe.Start, Mfe.Stop, Mfe.Delta, SatRec);
+    SGP4Funcs::twoline2rv(line1_buf, line2_buf, 'c', 'm', 'i', wgs84, Mfe.Start, Mfe.Stop, Mfe.Delta, SatRec);
 
     free(line1_buf);
     free(line2_buf);
@@ -138,8 +138,6 @@ void Dataset::LoadFromTLE(const String& tle_path)
 
     Name = FindNameForPath(tle_path);
 
-    printf("Name: %s\n", Name.CStr());
-
     std::string name_line;
     std::string line1;
     std::string line2;
@@ -150,15 +148,28 @@ void Dataset::LoadFromTLE(const String& tle_path)
 
     // Read in all of the TLE information
 
+    bool no_name_lines = false;
+
+
     while (true) {
         if (!std::getline(fb, name_line)) {
-            return;
+            break;
         }
 
-        std::getline(fb, line1);
-        std::getline(fb, line2);
+        // Historic TLEs are prefixed with 0, modern ones are letters (usually).
+        // If this TLE does not contain the metadata line, load from catalog
+        if (name_line[0] == '1') {
+            no_name_lines = true;
+        }
 
-        printf("Saving %s\n", name_line.c_str());
+
+        if (no_name_lines) {
+            line1 = name_line;
+        }
+        else {
+            std::getline(fb, line1);
+        }
+        std::getline(fb, line2);
 
         TleContext tle_ctx {};
 
@@ -173,11 +184,127 @@ void Dataset::LoadFromTLE(const String& tle_path)
             sat.AddTimeStep(time_step);
         }
 
-        SetNamesForSatellite(name_line, sat);
+        if (!no_name_lines) {
+            SetNamesForSatellite(name_line, sat);
+        }
 
         sat.LaunchYear = CharToNumber(line1[9]) * 10 + CharToNumber(line1[10]);
 
+        char norad_id[6];
+        memcpy(norad_id, line1.c_str() + 2, 5);
+
+        sat.NoradId = atoi(String(norad_id, 5).CStr());
+
         Satellites.push_back(sat);
+    }
+
+    if (no_name_lines) {
+        PopulateFromCatalog();
+    }
+}
+
+struct CatalogEntry
+{
+    String Name;
+    String Identifier;
+};
+
+void Dataset::PopulateFromCatalog()
+{
+    std::ifstream fb(ASSET_BASE_DIR "/Datasets/satcat.csv", std::ios::in);
+
+    std::string line;
+
+    // Skip first line
+    if (!std::getline(fb, line)) {
+        return;
+    }
+
+    std::unordered_map<uint32, CatalogEntry, Hash32Stl> Catalog;
+
+    char name[64];
+    char object_id[64];
+    char norad_id[8];
+
+    // Load catalog information in
+    while (true) {
+        if (!std::getline(fb, line)) {
+            break;
+        }
+
+        CatalogEntry entry {};
+
+        // Load the name into the buffer
+        int index;
+        for (index = 0; line[index] != ','; index++) {
+            name[index] = line[index];
+        }
+
+        name[index] = '\0';
+        entry.Name = String(name, index);
+
+        // Skip comma
+        ++index;
+
+        int buffer_index = 0;
+
+        // Load the object id in
+        for (buffer_index = 0; line[index] != ','; index++) {
+            object_id[buffer_index++] = line[index];
+        }
+        object_id[buffer_index] = '\0';
+        entry.Identifier = String(object_id, buffer_index);
+
+        // Skip comma
+        ++index;
+
+
+        // Load the object id in
+        for (buffer_index = 0; line[index] != ','; index++) {
+            norad_id[buffer_index++] = line[index];
+        }
+        norad_id[buffer_index] = '\0';
+        uint32 norad_number = atoi(norad_id);
+
+        // Skip comma
+        ++index;
+
+        Catalog[norad_number] = std::move(entry);
+    }
+
+
+    for (Satellite& sat : Satellites) {
+        auto it = Catalog.find(sat.NoradId);
+
+        if (it == Catalog.end()) {
+            continue;
+        }
+
+
+        sat.Name = it->second.Name;
+        sat.Identifier = it->second.Identifier;
+
+        uint32 i = 0;
+        uint32 line_len = sat.Name.Length;
+
+        const char* line_cstr = sat.Name.CStr();
+
+        if (line_len > 4 && !strncmp(line_cstr + line_len - 3, "DEB", 3)) {
+            sat.Series = String("Debris");
+        }
+        else {
+            for (; i < line_len; i++) {
+                char ch = line_cstr[i];
+                if (ch == '-') {
+                    sat.Series = String(line_cstr, i);
+                    break;
+                }
+            }
+        }
+
+        if (sat.Series.Length == 0) {
+            sat.Series = sat.Name;
+        }
     }
 }
 

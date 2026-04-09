@@ -34,13 +34,22 @@ public:
         return Position;
     }
 
+    bool IsDebris()
+    {
+        static constexpr Hash32 scDebrisHash = HashStr32("Debris");
+
+        return Series.GetHash() == scDebrisHash;
+    }
+
     void UpdatePosition() { Position += Movement; }
 
     void CalculateMoveSpeed(uint32 lerp_frames) { LerpFrames = lerp_frames; }
 
 public:
+    String Name;
     String Series;
     String Identifier;
+    uint32 NoradId;
 
     uint32 FrameStart = 0;
     Vec3r Position = Vec3r::sZero;

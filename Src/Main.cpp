@@ -53,6 +53,12 @@ static constexpr float32 scUIPaddingVertical = 10;
 static constexpr float32 scUIGridHorizontalSplits = 24;
 static constexpr float32 scUIGridVerticalSplits = 32;
 
+static constexpr float32 scDefaultMinZoom = 3.85f;
+static constexpr float32 scDefaultMaxZoom = 45.0f;
+
+static constexpr float32 scSelectedMinZoom = 1.0f;
+static constexpr float32 scSelectedMaxZoom = 4.5f;
+
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
 
 
@@ -82,7 +88,6 @@ public:
     rl::Color GetSatColor(Hash32 series_hash);
 
     void DisplayControls();
-    void DisplayControlsSelected();
     void DisplayControlsDefault();
 
     void DeselectSatellites();
@@ -99,7 +104,20 @@ public:
         }
     }
 
-    float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / 290.0f)) * 100.0f; }
+    float32 GetZoomPercent() const
+    {
+        float32 min_zoom = scSelectedMinZoom;
+        float32 max_zoom = scSelectedMaxZoom;
+
+        if (IsDefaultFilter()) {
+            min_zoom = scDefaultMinZoom;
+            max_zoom = scDefaultMaxZoom;
+        }
+
+        return 100 - ((Zoom - min_zoom) / (max_zoom - min_zoom)) * 100.0f;
+    }
+
+    float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / (300.0f - 10.0f))) * 100.0f; }
 
     ~Simulation();
 
@@ -162,53 +180,44 @@ public:
 
     bool bAnimateTimeFrames = false;
     bool bHideSatellites = false;
+    bool bShowControls = false;
+
+    // HACKY but I am running out of time
+    bool bTemporarilyShowDebris = false;
 
     std::unordered_map<Hash32, rl::Color, Hash32Stl> ColorMap;
 };
 
 void Simulation::DisplayControls()
 {
-    if (pPickedSatellite) {
-        DisplayControlsSelected();
-        return;
-    }
-    else {
+    static constexpr ImGuiWindowFlags scWindowFlags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize |
+                                                      ImGuiWindowFlags_AlwaysAutoResize;
+    if (ImGui::Begin("Controls", &bShowControls, scWindowFlags)) {
+        ImGui::PushFont(FontNormal);
+
         DisplayControlsDefault();
+
+
+        ImGui::PopFont();
     }
+
+    ImGui::End();
 }
 
-void Simulation::DisplayControlsSelected()
-{
-    DrawText("[LCLICK] - Select Satellite", 0, scUIGridVerticalSplits - 2, 14);
-    DrawText("[ESCAPE] - Globe View", 8, scUIGridVerticalSplits - 2, 14);
-    DrawText(String::Fmt("[I] - {} Unselected", SelectedFilter.bShowInactive ? "Hide" : "Show"), 16,
-             scUIGridVerticalSplits - 2, 14);
-
-    DrawText(String::Fmt("[SPACE]  - {} Animation", bAnimateTimeFrames ? "Pause" : "Play"), 0,
-             scUIGridVerticalSplits - 1, 14);
-    DrawText("[COMMA, PERIOD] - Next/Prev Frame", 8, scUIGridVerticalSplits - 1, 14);
-}
 
 void Simulation::DisplayControlsDefault()
 {
-    DrawText("[LCLICK] - Satellite Detail", 0, scUIGridVerticalSplits - 2, 14);
+    ImGui::LabelText("Select", "%s", "[LeftClick]");
 
-    DrawText(String::Fmt("[SPACE]  - {} Animation", bAnimateTimeFrames ? "Pause" : "Play"), 0,
-             scUIGridVerticalSplits - 1, 14);
-    DrawText("[COMMA, PERIOD] - Prev/Next Frame", 8, scUIGridVerticalSplits - 1, 14);
+    ImGui::LabelText(bAnimateTimeFrames ? "Pause Animation" : "Play Animation", "%s", "[Space]");
+    ImGui::LabelText(bHideSatellites ? "Show Satellites" : "Hide Satellites", "%s", "[H]");
+
+    if (pPickedSatellite) {
+        ImGui::LabelText("Deselect", "%s", "[Escape]");
+        ImGui::LabelText("Cycle Filter", "%s", "[I]");
+    }
 }
 
-void Simulation::DeselectSatellites()
-{
-    SetCameraTarget(Vec3r::sZero);
-    Zoom = SavedZoom;
-
-    AngleX = SavedAngleX;
-    AngleY = SavedAngleY;
-
-    pFilterInUse = &DefaultFilter;
-    pPickedSatellite = nullptr;
-}
 
 void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
 
@@ -447,16 +456,21 @@ void Simulation::SelectSatellite(Satellite* selected)
         SavedZoom = Zoom;
     }
 
+    // YUCKY
+    if (selected->IsDebris() && !SelectedFilter.bShowDebris) {
+        bTemporarilyShowDebris = true;
+        SelectedFilter.bShowDebris = true;
+    }
+
     SelectedFilter.Selected.Satellites.clear();
     SelectedFilter.Unselected.Satellites.clear();
+    SelectedFilter.Debris.Satellites.clear();
 
     for (Satellite& sat : TmpDataset.Satellites) {
         if (sat.Series.GetHash() == selected->Series.GetHash()) {
-            // SelectedFilter.Selected.Satellites.push_back(&sat);
             SelectedFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()), true);
         }
         else {
-            // SelectedFilter.Unselected.Satellites.push_back(&sat);
             SelectedFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()), false);
         }
     }
@@ -469,6 +483,24 @@ void Simulation::SelectSatellite(Satellite* selected)
     SetCameraTarget(selected->Position);
 
     Zoom = cSinglePointZoom;
+}
+
+
+void Simulation::DeselectSatellites()
+{
+    SetCameraTarget(Vec3r::sZero);
+    Zoom = SavedZoom;
+
+    AngleX = SavedAngleX;
+    AngleY = SavedAngleY;
+
+    pFilterInUse = &DefaultFilter;
+    pPickedSatellite = nullptr;
+
+    if (bTemporarilyShowDebris) {
+        // Revert back to the original state
+        SelectedFilter.bShowDebris = false;
+    }
 }
 
 Simulation::~Simulation()
@@ -550,7 +582,19 @@ void Simulation::CheckControls()
     }
 
     if (rl::IsKeyPressed(rl::KEY_I)) {
-        SelectedFilter.bShowInactive = !SelectedFilter.bShowInactive;
+        // Cycle should go Selection Only -> All -> Unselected Only
+
+        switch (SelectedFilter.Filter) {
+        case SelectionFilter::FilterType::eOnlySelected:
+            SelectedFilter.Filter = SelectionFilter::FilterType::eShowAll;
+            break;
+        case SelectionFilter::FilterType::eShowAll:
+            SelectedFilter.Filter = SelectionFilter::FilterType::eOnlyUnselected;
+            break;
+        case SelectionFilter::FilterType::eOnlyUnselected:
+            SelectedFilter.Filter = SelectionFilter::FilterType::eOnlySelected;
+            break;
+        }
     }
 
     if (rl::IsKeyPressed(rl::KEY_ESCAPE)) {
@@ -634,20 +678,6 @@ void Simulation::Render()
     rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
-
-    // if (FilterInUse == &DefaultFilter && FilterInUse->Unselected.Exists()) {
-    //     rl::DrawMeshInstanced(SatModel, SatMaterial, FilterInUse->Unselected.TransformBuffer,
-    //                           FilterInUse->Unselected.Size());
-    // }
-
-    // if (FilterInUse->Selected.Exists()) {
-    //     rl::DrawMeshInstanced(SatModel, SelectedMaterial, FilterInUse->Selected.TransformBuffer,
-    //                           FilterInUse->Selected.Size());
-    // }
-    //
-    //
-
-
     if (!bHideSatellites) {
         pFilterInUse->RenderSatellites(SatModel, SatMaterial);
     }
@@ -660,7 +690,6 @@ void Simulation::Render()
 
     rl::EndMode3D();
 
-    DisplayControls();
 
     rl::rlImGuiBegin();
 
@@ -713,10 +742,15 @@ void Simulation::Render()
 
         ImGui::SeparatorText("Information");
         {
+            ImGui::LabelText("Zoom", "%.02f%%", (GetZoomPercent()));
+
             ImGui::LabelText("Dataset", "%s", TmpDataset.Name.CStr());
             ImGui::LabelText("Count", "%d / %d", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount());
         }
 
+
+        ImGui::Checkbox("Show Debris", &pFilterInUse->bShowDebris);
+        ImGui::Checkbox("Show Controls", &bShowControls);
 
         ImGui::PopFont();
     }
@@ -727,9 +761,13 @@ void Simulation::Render()
     ImGui::SetNextWindowSize(ImVec2(300, 350));
     if (ImGui::Begin("Detail", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
+
         if (pPickedSatellite) {
+            ImGui::LabelText("Name", "%s", pPickedSatellite->Name.CStr());
             ImGui::LabelText("Series", "%s", pPickedSatellite->Series.CStr());
             ImGui::LabelText("Id", "%s", pPickedSatellite->Identifier.CStr());
+            ImGui::LabelText("NORAD ID", "%d", pPickedSatellite->NoradId);
+            ImGui::LabelText("Launched", "'%02d", pPickedSatellite->LaunchYear);
 
             // ImGui::TextUnformatted(String::Fmt("Series {}", pPickedSatellite->Series).CStr());
             // ImGui::TextUnformatted(String::Fmt("Id {}", pPickedSatellite->Identifier).CStr());
@@ -738,38 +776,34 @@ void Simulation::Render()
             float pos_v[3] = { static_cast<float32>(pos.X), static_cast<float32>(pos.Y), static_cast<float32>(pos.Z) };
             ImGui::InputFloat3("Position", pos_v);
 
+            bool show_selected = SelectedFilter.CanShowSelected();
+            bool show_unselected = SelectedFilter.CanShowUnselected();
+
+            ImGui::Checkbox("Show Unselected", &show_unselected);
+            ImGui::Checkbox("Show Selected", &show_selected);
+
+            if (show_selected != SelectedFilter.CanShowSelected() ||
+                show_unselected != SelectedFilter.CanShowUnselected()) {
+                SelectedFilter.SetFilterType(show_selected, show_unselected);
+            }
+
             if (ImGui::Button("Deselect", ImVec2(150, 25))) {
                 DeselectSatellites();
             }
         }
         ImGui::PopFont();
     }
+
+    if (bShowControls) {
+        DisplayControls();
+    }
+
     ImGui::End();
 
     open = true;
 
 
     rl::rlImGuiEnd();
-
-
-    DrawText(String::Fmt("Frame {}/{}", TimeFrameIndex + 1, TmpDataset.NumTimesteps), 0, 0, 32);
-    DrawText(String::Fmt("{} Dataset", TmpDataset.Name), 0, 2, 20);
-    DrawText(String::Fmt("Count {} / {}", pFilterInUse->GetSatelliteCount(), DefaultFilter.GetSatelliteCount()), 0, 3,
-             20);
-    // DrawText(String::Fmt("Speed {:.00f}%", , 0, 4, 20);
-
-    // if (pPickedSatellite) {
-    //     uint32 picked_x = 8;
-    //     DrawText(String::Fmt("Series {} - Id {}", pPickedSatellite->Series.CStr(),
-    //     pPickedSatellite->Identifier.CStr()),
-    //              picked_x, 0, 20);
-
-    //     DrawText(String::Fmt("Position {:.04f} {:.04f} {:.04f}", pPickedSatellite->Position.X,
-    //                          pPickedSatellite->Position.Y, pPickedSatellite->Position.Z),
-    //              picked_x, 1, 14);
-
-    //     DrawText(String::Fmt("Launched in '{:02}", pPickedSatellite->LaunchYear), picked_x, 2, 14);
-    // }
 
 
     rl::EndDrawing();
@@ -782,6 +816,13 @@ void Simulation::Render()
             float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
 
             Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
+
+            if (IsDefaultFilter()) {
+                Zoom = rl::Clamp(Zoom, scDefaultMinZoom, scDefaultMaxZoom);
+            }
+            else {
+                Zoom = rl::Clamp(Zoom, scSelectedMinZoom, scSelectedMaxZoom);
+            }
         }
 
         if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
@@ -822,7 +863,7 @@ int main(int argc, char* argv[])
     Simulation sim {};
 
 #ifdef DISABLE_BINARY_CACHING
-    sim.TmpDataset.LoadFromTLE(ASSET_BASE_DIR "/Datasets/NORAD_TLE.txt");
+    sim.TmpDataset.LoadFromTLE(ASSET_BASE_DIR "/Datasets/2026-04-09.tle");
 
 #else
     if (argc > 1 && !strcmp(argv[1], "rebuild")) {

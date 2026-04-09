@@ -62,6 +62,22 @@ public:
             }
         }
 
+        Satellite* RaycastTo(rl::Ray& ray)
+        {
+            for (uint32 i = 0; i < Satellites.size(); i++) {
+                Satellite* sat = Satellites[i];
+
+                rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat->Position.ToRL(), 0.02f);
+
+                if (sphere_hit.hit) {
+                    return sat;
+                }
+            }
+
+
+            return nullptr;
+        }
+
         void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) const
         {
             // material.maps[rl::MATERIAL_MAP_DIFFUSE].color = Color;
@@ -72,7 +88,7 @@ public:
         }
 
         uint32 Size() const { return Satellites.size(); }
-        bool Exists() const { return TransformBuffer != nullptr; }
+        bool Exists() const { return TransformBuffer != nullptr && Satellites.size() > 0; }
 
         ~Component() { Mem::Free(TransformBuffer); }
 
@@ -92,33 +108,52 @@ public:
     virtual void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) {}
     virtual Satellite* RaycastToSatellite(rl::Ray& ray) { return nullptr; }
     virtual uint32 GetSatelliteCount() const { return 0; }
+
+public:
+    bool bShowDebris = true;
 };
 
 class SelectionFilter : public BaseFilter
 {
 public:
+    enum class FilterType
+    {
+        eShowAll,
+        eOnlySelected,
+        eOnlyUnselected,
+    };
+
+public:
     void Create(uint32 size)
     {
         Selected.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
         Unselected.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
+        Debris.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
     }
 
     void Finalize() override
     {
         Unselected.Finalize();
         Selected.Finalize();
+        Debris.Finalize();
     }
 
     void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to = false) override
     {
         Selected.UpdateSatellites(use_timestep, warp_to);
         Unselected.UpdateSatellites(use_timestep, warp_to);
+        Debris.UpdateSatellites(use_timestep, warp_to);
     }
 
 
     void AddSatellite(Satellite& sat, rl::Color color, bool selected)
     {
-        if (selected) {
+        if (sat.IsDebris()) {
+            Debris.Satellites.push_back(&sat);
+            rl::Color& vc = Debris.ColorBuffer[Debris.Size() - 1];
+            vc = color;
+        }
+        else if (selected) {
             Selected.Satellites.push_back(&sat);
 
             rl::Color& vc = Selected.ColorBuffer[Selected.Size() - 1];
@@ -136,12 +171,15 @@ public:
     {
         rl::Color default_color = material.maps[rl::MATERIAL_MAP_DIFFUSE].color;
 
-        if (bShowInactive) {
-            Unselected.RenderSatellites(sat_model, material);
+        if (Filter == FilterType::eOnlySelected || Filter == FilterType::eShowAll) {
             Selected.RenderSatellites(sat_model, material);
         }
-        else {
-            Selected.RenderSatellites(sat_model, material);
+        if (Filter == FilterType::eOnlyUnselected || Filter == FilterType::eShowAll) {
+            Unselected.RenderSatellites(sat_model, material);
+        }
+
+        if (bShowDebris) {
+            Debris.RenderSatellites(sat_model, material);
         }
 
         if (pPickedSatellite) {
@@ -162,42 +200,66 @@ public:
 
     Satellite* RaycastToSatellite(rl::Ray& ray) override
     {
-        Satellite* sat = RaycastToComponent(Selected, ray);
+        Satellite* sat = Selected.RaycastTo(ray);
 
-        if (bShowInactive && !sat) {
-            sat = RaycastToComponent(Unselected, ray);
+        if (CanShowUnselected() && !sat) {
+            sat = Unselected.RaycastTo(ray);
+        }
+
+        if (bShowDebris && !sat) {
+            sat = Debris.RaycastTo(ray);
         }
 
         return sat;
     }
 
-
-    uint32 GetSatelliteCount() const override { return Selected.Size(); }
-
-private:
-    Satellite* RaycastToComponent(const Component& comp, rl::Ray& ray)
+    FORCE_INLINE bool CanShowSelected() const
     {
-        for (uint32 i = 0; i < comp.Size(); i++) {
-            Satellite* sat = comp.Satellites[i];
+        return Filter == FilterType::eShowAll || Filter == FilterType::eOnlySelected;
+    }
+    FORCE_INLINE bool CanShowUnselected() const
+    {
+        return Filter == FilterType::eShowAll || Filter == FilterType::eOnlyUnselected;
+    }
 
-            rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat->Position.ToRL(), 0.02f);
-
-            if (sphere_hit.hit) {
-                return sat;
-            }
+    void SetFilterType(bool show_selected, bool show_unselected)
+    {
+        if (show_selected && show_unselected) {
+            Filter = FilterType::eShowAll;
+            return;
         }
 
+        if (show_selected) {
+            Filter = FilterType::eOnlySelected;
+            return;
+        }
 
-        return nullptr;
+        if (show_unselected) {
+            Filter = FilterType::eOnlyUnselected;
+            return;
+        }
+
+        SetFilterType(!CanShowSelected(), !CanShowUnselected());
+    }
+
+    uint32 GetSatelliteCount() const override
+    {
+        uint32 size = Selected.Size();
+        if (bShowDebris) {
+            size += Debris.Size();
+        }
+
+        return size;
     }
 
 public:
     Component Unselected;
     Component Selected;
+    Component Debris;
 
     Satellite* pPickedSatellite = nullptr;
 
-    bool bShowInactive = false;
+    FilterType Filter = FilterType::eOnlySelected;
 };
 
 class NormalFilter : public BaseFilter
@@ -207,51 +269,75 @@ public:
     {
         if (Sats.ColorBuffer != nullptr) {
             Sats.ColorBuffer = Mem::Realloc<rl::Color>(Sats.ColorBuffer, size * sizeof(rl::Color));
+            Debris.ColorBuffer = Mem::Realloc<rl::Color>(Debris.ColorBuffer, size * sizeof(rl::Color));
         }
         else {
             Sats.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
+            Debris.ColorBuffer = Mem::Alloc<rl::Color>(size * sizeof(rl::Color));
         }
     }
 
-    void Finalize(const rl::Mesh& sat_model, rl::Shader shader) { Sats.Finalize(); }
+    void Finalize(const rl::Mesh& sat_model, rl::Shader shader)
+    {
+        Sats.Finalize();
+        Debris.Finalize();
+    }
 
     void AddSatellite(Satellite& sat, rl::Color color)
     {
-        Sats.Satellites.push_back(&sat);
-
-        rl::Color& vc = Sats.ColorBuffer[Sats.Size() - 1];
-        vc = color;
+        if (sat.IsDebris()) {
+            Debris.Satellites.push_back(&sat);
+            rl::Color& vc = Debris.ColorBuffer[Debris.Size() - 1];
+            vc = color;
+        }
+        else {
+            Sats.Satellites.push_back(&sat);
+            rl::Color& vc = Sats.ColorBuffer[Sats.Size() - 1];
+            vc = color;
+        }
     }
 
     void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to = false) override
     {
         Sats.UpdateSatellites(use_timestep, warp_to);
+        Debris.UpdateSatellites(use_timestep, warp_to);
     }
+
     void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) override
     {
         Sats.RenderSatellites(sat_model, material);
+
+        if (bShowDebris) {
+            Debris.RenderSatellites(sat_model, material);
+        }
     }
 
-    uint32 GetSatelliteCount() const override { return Sats.Size(); }
+    uint32 GetSatelliteCount() const override
+    {
+        uint32 size = Sats.Size();
+        if (bShowDebris) {
+            size += Debris.Size();
+        }
+
+        return size;
+    }
 
 
     Satellite* RaycastToSatellite(rl::Ray& ray) override
     {
-        for (uint32 i = 0; i < Sats.Size(); i++) {
-            Satellite* sat = Sats.Satellites[i];
+        Satellite* sat = Sats.RaycastTo(ray);
 
-            rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat->Position.ToRL(), 0.02f);
-
-            if (sphere_hit.hit) {
-                return sat;
-            }
+        if (bShowDebris && !sat) {
+            sat = Debris.RaycastTo(ray);
         }
-        return nullptr;
+
+        return sat;
     }
 
 
 public:
     Component Sats;
+    Component Debris;
 };
 
 
