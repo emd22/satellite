@@ -22,6 +22,7 @@ space
 .DS_Store
 .cache/**/*
 .*
+*.ninja
 
 # ALL_BUILD and space.dir (windows)
 *.dir
