@@ -8,6 +8,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <unordered_map>
 
 namespace rl {
 
@@ -501,6 +502,8 @@ void Simulation::DeselectSatellites()
         // Revert back to the original state
         SelectedFilter.bShowDebris = false;
     }
+
+    DefaultFilter.UpdateSatellites({}, false);
 }
 
 Simulation::~Simulation()

@@ -12,7 +12,7 @@ file (GLOB_RECURSE HEADERS "Src/*.hpp" "Src/*.h" "Src/*.inl")
 
 add_definitions(
 	-D_USE_MATH_DEFINES
-	-DASSET_BASE_DIR="${CMAKE_SOURCE_DIR}"
+	-DASSET_BASE_DIR="."
     # -DFX_DEBUG_STATIC_ARRAY
 )
 
