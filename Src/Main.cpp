@@ -71,6 +71,10 @@ static constexpr float32 scUIPaddingVertical = 10;
 static constexpr float32 scUIGridHorizontalSplits = 24;
 static constexpr float32 scUIGridVerticalSplits = 32;
 
+static constexpr float32 scUIDesignSize = 900.0f;
+static constexpr float32 scMinUIScale = 0.65f;
+static constexpr uint32 scCollapsedUIWidth = 600;
+
 static constexpr float32 scDefaultMinZoom = 3.85f;
 static constexpr float32 scDefaultMaxZoom = 45.0f;
 
@@ -200,6 +204,7 @@ public:
 
     float32 GetSurfaceZoomLimit() const;
     void UpdateZoom(float32 delta_time);
+    void UpdateUIScale();
 
     float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / (300.0f - 10.0f))) * 100.0f; }
 
@@ -247,6 +252,12 @@ public:
 
     float32 UICellSizeX = 1.0f;
     float32 UICellSizeY = 1.0f;
+
+    float32 UIScale = 1.0f;
+    ImGuiStyle BaseUIStyle;
+
+    float32 PrevPinchDistance = 0.0f;
+    bool bInTouchGesture = false;
 
     uint32 NoradIdQuery = 0;
 
@@ -443,7 +454,35 @@ static bool GetCanvasContainerSize(int32& width, int32& height)
 
     return width > 0 && height > 0;
 }
+
+/**
+ * @brief Tracks the number of fingers on the screen, read by GetActiveTouchCount().
+ */
+static void InstallTouchCounter()
+{
+    EM_ASM({
+        const canvas = Module['canvas'];
+        Module['activeTouches'] = 0;
+        const update = (event) => { Module['activeTouches'] = event.touches.length; };
+        for (const type of['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+            canvas.addEventListener(type, update);
+        }
+    });
+}
 #endif
+
+/**
+ * @brief Gets the number of fingers on the screen. On the web Raylib's count gets stuck at 1 when several fingers are
+ * lifted at once, so we can just use the browser's touch count instead.
+ */
+static int32 GetActiveTouchCount()
+{
+#ifdef __EMSCRIPTEN__
+    return EM_ASM_INT({ return Module['activeTouches'] | 0; });
+#else
+    return rl::GetTouchPointCount();
+#endif
+}
 
 void Simulation::InitGraphics()
 {
@@ -460,6 +499,8 @@ void Simulation::InitGraphics()
         WindowWidth = 900;
         WindowHeight = 900;
     }
+
+    InstallTouchCounter();
 #else
     WindowWidth = 900;
     WindowHeight = 900;
@@ -596,6 +637,9 @@ void Simulation::InitGraphics()
 
     FontNormal = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 16.0f);
     FontLarge = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 32.0f);
+
+    BaseUIStyle = ImGui::GetStyle();
+    UpdateUIScale();
 }
 
 
@@ -679,6 +723,22 @@ void Simulation::UpdateZoom(float32 delta_time)
     const float32 surface_limit = GetSurfaceZoomLimit();
     TargetZoom = std::min(TargetZoom, surface_limit);
     Zoom = std::min(Zoom, surface_limit);
+}
+
+
+void Simulation::UpdateUIScale()
+{
+    const float32 scale = std::clamp(float32(std::min(WindowWidth, WindowHeight)) / scUIDesignSize, scMinUIScale, 1.0f);
+    if (scale == UIScale) {
+        return;
+    }
+
+    UIScale = scale;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = BaseUIStyle;
+    style.ScaleAllSizes(scale);
+    style.FontScaleMain = scale;
 }
 
 
@@ -826,6 +886,8 @@ void Simulation::Render()
         WindowHeight = rl::GetScreenHeight();
         UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
         UICellSizeY = (float32(WindowHeight) - scUIPaddingVertical) / scUIGridVerticalSplits;
+
+        UpdateUIScale();
     }
 
     static bool mouse_pressed = false;
@@ -910,8 +972,11 @@ void Simulation::Render()
     bool open = true;
 
     // Default layout for when there is no imgui.ini (e.g. on the web)
+    const bool collapse_ui = WindowWidth < scCollapsedUIWidth;
+
     ImGui::SetNextWindowPos(ImVec2(0, 1), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 500));
+    ImGui::SetNextWindowCollapsed(collapse_ui, ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Tools", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
@@ -981,8 +1046,9 @@ void Simulation::Render()
 
     open = pPickedSatellite != nullptr;
 
-    ImGui::SetNextWindowPos(ImVec2(float32(WindowWidth) - 304, 1), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(float32(WindowWidth) - 304.0f * UIScale, 1), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 350));
+    ImGui::SetNextWindowCollapsed(collapse_ui, ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Detail", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
 
@@ -1036,10 +1102,33 @@ void Simulation::Render()
     if (!ImGui::IsAnyItemHovered()) {
         float zoom_movement = rl::GetMouseWheelMove();
         if (abs(zoom_movement) > 0.005f) {
-            TargetZoom *= expf(zoom_movement * scZoomSensitivity);
+            // Scrolling up (positive) zooms in, which moves the camera closer
+            TargetZoom *= expf(-zoom_movement * scZoomSensitivity);
         }
 
-        if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
+
+        const int32 touch_count = GetActiveTouchCount();
+        if (touch_count >= 2) {
+            const float32 pinch_distance = rl::Vector2Distance(rl::GetTouchPosition(0), rl::GetTouchPosition(1));
+            if (PrevPinchDistance > 0.0f && pinch_distance > 0.0f) {
+                TargetZoom *= PrevPinchDistance / pinch_distance;
+            }
+
+            PrevPinchDistance = pinch_distance;
+            bInTouchGesture = true;
+            mouse_pressed = false;
+        }
+        else {
+            PrevPinchDistance = 0.0f;
+
+            if (touch_count == 0) {
+                bInTouchGesture = false;
+            }
+        }
+
+        // The press frame is skipped as a new touch moves the mouse position from wherever the last touch ended
+        if (!bInTouchGesture && rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON) &&
+            !rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
             rl::Vector2 mouse_delta = rl::GetMouseDelta();
 
             float32 move_magnitude = abs(rl::Vector2Length(mouse_delta));
@@ -1051,7 +1140,7 @@ void Simulation::Render()
             }
         }
 
-        if (rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
+        if (!bInTouchGesture && rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
             mouse_pressed = true;
         }
 
