@@ -1,5 +1,6 @@
 build
 build/**/*
+build-web
 compile_commands.json
 *.bin
 
@@ -8,6 +9,11 @@ CMakeFiles
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+x64
+Release
+Debug
+RelWithDebInfo
+
 
 *.vcxproj
 *.vcxproj.*

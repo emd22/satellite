@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Satellite Visualization</title>
+		<style>
+			html,
+			body {
+				margin: 0;
+				padding: 0;
+				width: 100%;
+				height: 100%;
+				overflow: hidden;
+				background: #000;
+			}
+
+			#canvas {
+				display: block;
+				border: 0;
+				outline: none;
+			}
+
+			#status {
+				position: fixed;
+				inset: 0;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				color: #ccc;
+				font: 16px sans-serif;
+				pointer-events: none;
+			}
+		</style>
+	</head>
+	<body>
+		<canvas
+			id="canvas"
+			oncontextmenu="event.preventDefault()"
+			tabindex="-1"
+		></canvas>
+
+		<!-- Status box to show that we are currently loading or if errors have occurred -->
+		<div id="status">Loading satellite data...</div>
+
+		<script>
+			var statusElement = document.getElementById("status");
+
+			var Module = {
+				canvas: document.getElementById("canvas"),
+
+				// Emscripten clears the status once main() has run
+				setStatus: function (text) {
+					statusElement.textContent = text;
+					statusElement.style.display = text ? "flex" : "none";
+				},
+				print: function (text) {
+					console.log(text);
+				},
+				printErr: function (text) {
+					console.error(text);
+				},
+			};
+
+			window.onerror = function () {
+				statusElement.textContent =
+					"An error occurred, see the console for details.";
+				statusElement.style.display = "flex";
+			};
+		</script>
+		{{{ SCRIPT }}}
+	</body>
+</html>

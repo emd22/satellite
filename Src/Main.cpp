@@ -8,6 +8,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <unordered_map>
 
 namespace rl {
@@ -33,6 +34,10 @@ namespace rl {
 #include "Vec3.hpp"
 
 #include "ThirdParty/imgui/imgui.h"
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 /// The number of frames it takes for a satellite to reach its destination.
 static uint32 sNumLerpFrames = 240;
@@ -61,6 +66,62 @@ static constexpr float32 scSelectedMinZoom = 1.0f;
 static constexpr float32 scSelectedMaxZoom = 4.5f;
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
+
+
+/**
+ * @brief Loads a shader from disk given the vertex and pixel shader paths.
+ * NOTE: The version header is modified for web builds
+ */
+static rl::Shader LoadShaderPortable(const char* vs_path, const char* fs_path)
+{
+#if defined(__EMSCRIPTEN__)
+    auto LoadShaderSource = [](const char* path) -> char*
+    {
+        if (!path) {
+            return nullptr;
+        }
+
+        char* source = rl::LoadFileText(path);
+        if (!source) {
+            return nullptr;
+        }
+
+        static constexpr char scDesktopHeader[] = "#version 330";
+        static constexpr char scWebHeader[] = "#version 300 es\nprecision highp float;\nprecision highp int;";
+
+        char* version_start = strstr(source, scDesktopHeader);
+        if (!version_start) {
+            return source;
+        }
+
+        const char* rest = version_start + strlen(scDesktopHeader);
+
+        size_t prefix_len = version_start - source;
+        size_t total = prefix_len + strlen(scWebHeader) + strlen(rest) + 1;
+
+        char* patched = static_cast<char*>(malloc(total));
+        memcpy(patched, source, prefix_len);
+        strcpy(patched + prefix_len, scWebHeader);
+        strcat(patched, rest);
+
+        rl::UnloadFileText(source);
+
+        return patched;
+    };
+
+    char* vs_source = LoadShaderSource(vs_path);
+    char* fs_source = LoadShaderSource(fs_path);
+
+    rl::Shader shader = rl::LoadShaderFromMemory(vs_source, fs_source);
+
+    free(vs_source);
+    free(fs_source);
+
+    return shader;
+#else
+    return rl::LoadShader(vs_path, fs_path);
+#endif
+}
 
 
 class Simulation
@@ -326,8 +387,14 @@ void Simulation::UpdateLerpSpeed(uint32 lerp_frames)
 
 void Simulation::InitGraphics()
 {
+#ifdef __EMSCRIPTEN__
+    // Fill the browser window
+    WindowWidth = EM_ASM_INT(return window.innerWidth;);
+    WindowHeight = EM_ASM_INT(return window.innerHeight;);
+#else
     WindowWidth = 900;
     WindowHeight = 900;
+#endif
 
 
     rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
@@ -367,8 +434,8 @@ void Simulation::InitGraphics()
 
 
     { // Load Atmosphere shader
-        AtmosphereShader = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
-                                          ASSET_BASE_DIR "/Shaders/Atmosphere.fs");
+        AtmosphereShader = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
+                                              ASSET_BASE_DIR "/Shaders/Atmosphere.fs");
         // Get shader locations
         AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(AtmosphereShader, "mvp");
         AtmosphereShader.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(AtmosphereShader, "viewPos");
@@ -385,7 +452,7 @@ void Simulation::InitGraphics()
     }
 
     { // Load lighting shader
-        SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", nullptr);
+        SatLit = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", nullptr);
         // Get shader locations
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
@@ -403,7 +470,8 @@ void Simulation::InitGraphics()
 
 
     { // Load lighting shader
-        EarthLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
+        EarthLit = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
+                                      ASSET_BASE_DIR "/Shaders/Lighting.fs");
         // Get shader locations
         EarthLit.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(EarthLit, "mvp");
         EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(EarthLit, "viewPos");
@@ -445,7 +513,10 @@ void Simulation::InitGraphics()
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
+#ifndef __EMSCRIPTEN__
+    // On the web the browser paces frames with requestAnimationFrame
     rl::SetTargetFPS(120);
+#endif
     rl::SetExitKey(rl::KEY_NULL);
 
     rl::rlImGuiSetup(true);
@@ -715,6 +786,8 @@ void Simulation::Render()
                                                       ImGuiWindowFlags_AlwaysAutoResize;
     bool open = true;
 
+    // Default layout for when there is no imgui.ini (e.g. on the web)
+    ImGui::SetNextWindowPos(ImVec2(0, 1), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 500));
 
     if (ImGui::Begin("Tools", nullptr, scWindowFlags)) {
@@ -785,6 +858,7 @@ void Simulation::Render()
 
     open = pPickedSatellite != nullptr;
 
+    ImGui::SetNextWindowPos(ImVec2(float32(WindowWidth) - 304, 1), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 350));
     if (ImGui::Begin("Detail", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
@@ -832,9 +906,8 @@ void Simulation::Render()
 
     rl::rlImGuiEnd();
 
-
-    rl::EndDrawing();
-
+    // NOTE: Input is handled before EndDrawing(), as that is where Raylib advances its input state. On the web,
+    // events arrive between frames, so any presses/scrolls would already be cleared after EndDrawing().
     ImGuiIO& imgui_io = ImGui::GetIO();
 
     if (!ImGui::IsAnyItemHovered()) {
@@ -881,6 +954,9 @@ void Simulation::Render()
     }
 
 
+    rl::EndDrawing();
+
+
     ++FrameCount;
 }
 
@@ -910,11 +986,22 @@ int main(int argc, char* argv[])
 
     sim.InitGraphics();
 
-
+#ifdef __EMSCRIPTEN__
+    // The browser owns the main loop, so hand each frame off to it. This call does not return.
+    emscripten_set_main_loop_arg(
+        [](void* arg)
+        {
+            Simulation* sim = static_cast<Simulation*>(arg);
+            sim->CheckControls();
+            sim->Render();
+        },
+        &sim, 0, true);
+#else
     while (!rl::WindowShouldClose()) {
         sim.CheckControls();
         sim.Render();
     }
+#endif
 
 
     return 0;
