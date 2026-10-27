@@ -47,35 +47,36 @@ public:
             UpdateTransforms();
         }
 
-        void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to)
+        void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction)
         {
             for (int i = 0; i < Size(); i++) {
                 Satellite* sat = Satellites[i];
                 if (use_timestep.has_value()) {
-                    sat->MoveToTimeStep(use_timestep.value(), warp_to);
+                    sat->MoveToTimeStep(use_timestep.value());
                 }
 
-                sat->UpdatePosition();
+                sat->UpdatePosition(fraction);
 
                 const rl::Vector3 pos = sat->Position.ToRL();
                 TransformBuffer[i] = rl::MatrixTranslate(pos.x, pos.y, pos.z);
             }
         }
 
-        Satellite* RaycastTo(rl::Ray& ray)
+        /**
+         * @brief Finds the satellite closest along the ray. Only hits nearer than `nearest_distance` count
+         */
+        void RaycastTo(const rl::Ray& ray, float32& nearest_distance, Satellite*& nearest) const
         {
             for (uint32 i = 0; i < Satellites.size(); i++) {
                 Satellite* sat = Satellites[i];
 
                 rl::RayCollision sphere_hit = rl::GetRayCollisionSphere(ray, sat->Position.ToRL(), 0.02f);
 
-                if (sphere_hit.hit) {
-                    return sat;
+                if (sphere_hit.hit && sphere_hit.distance < nearest_distance) {
+                    nearest_distance = sphere_hit.distance;
+                    nearest = sat;
                 }
             }
-
-
-            return nullptr;
         }
 
         void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) const
@@ -103,10 +104,12 @@ public:
 
 public:
     virtual void Finalize() {}
-    virtual void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to) {}
+
+    virtual void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction) {}
     virtual void MoveSatellitesToTimeStep() {}
     virtual void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) {}
-    virtual Satellite* RaycastToSatellite(rl::Ray& ray) { return nullptr; }
+    /// Returns the nearest visible satellite on the ray, ignoring anything at or beyond `max_distance`
+    virtual Satellite* RaycastToSatellite(const rl::Ray& ray, float32 max_distance) { return nullptr; }
     virtual uint32 GetSatelliteCount() const { return 0; }
 
 public:
@@ -138,11 +141,11 @@ public:
         Debris.Finalize();
     }
 
-    void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to = false) override
+    void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction) override
     {
-        Selected.UpdateSatellites(use_timestep, warp_to);
-        Unselected.UpdateSatellites(use_timestep, warp_to);
-        Debris.UpdateSatellites(use_timestep, warp_to);
+        Selected.UpdateSatellites(use_timestep, fraction);
+        Unselected.UpdateSatellites(use_timestep, fraction);
+        Debris.UpdateSatellites(use_timestep, fraction);
     }
 
 
@@ -198,19 +201,23 @@ public:
         material.maps[rl::MATERIAL_MAP_DIFFUSE].color = default_color;
     }
 
-    Satellite* RaycastToSatellite(rl::Ray& ray) override
+    Satellite* RaycastToSatellite(const rl::Ray& ray, float32 max_distance) override
     {
-        Satellite* sat = Selected.RaycastTo(ray);
+        Satellite* nearest = nullptr;
 
-        if (CanShowUnselected() && !sat) {
-            sat = Unselected.RaycastTo(ray);
+        if (CanShowSelected()) {
+            Selected.RaycastTo(ray, max_distance, nearest);
         }
 
-        if (bShowDebris && !sat) {
-            sat = Debris.RaycastTo(ray);
+        if (CanShowUnselected()) {
+            Unselected.RaycastTo(ray, max_distance, nearest);
         }
 
-        return sat;
+        if (bShowDebris) {
+            Debris.RaycastTo(ray, max_distance, nearest);
+        }
+
+        return nearest;
     }
 
     FORCE_INLINE bool CanShowSelected() const
@@ -297,10 +304,10 @@ public:
         }
     }
 
-    void UpdateSatellites(std::optional<uint32> use_timestep, bool warp_to = false) override
+    void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction) override
     {
-        Sats.UpdateSatellites(use_timestep, warp_to);
-        Debris.UpdateSatellites(use_timestep, warp_to);
+        Sats.UpdateSatellites(use_timestep, fraction);
+        Debris.UpdateSatellites(use_timestep, fraction);
     }
 
     void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) override
@@ -323,15 +330,17 @@ public:
     }
 
 
-    Satellite* RaycastToSatellite(rl::Ray& ray) override
+    Satellite* RaycastToSatellite(const rl::Ray& ray, float32 max_distance) override
     {
-        Satellite* sat = Sats.RaycastTo(ray);
+        Satellite* nearest = nullptr;
 
-        if (bShowDebris && !sat) {
-            sat = Debris.RaycastTo(ray);
+        Sats.RaycastTo(ray, max_distance, nearest);
+
+        if (bShowDebris) {
+            Debris.RaycastTo(ray, max_distance, nearest);
         }
 
-        return sat;
+        return nearest;
     }
 
 

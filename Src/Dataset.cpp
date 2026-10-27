@@ -3,6 +3,8 @@
 #include "Config.hpp"
 #include "String.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -17,7 +19,11 @@ class TleContext
 public:
     void CreateFromEntry(const char* line1, const char* line2);
 
-    Satellite::TimeStep GetTimeStepForTime(double time);
+    /**
+     * @brief Propagates to a Julian date. Returns false if SGP4 rejects the state.
+     * @param earth_angle Rotation from the inertial frame into the Earth texture frame (radians)
+     */
+    bool GetTimeStepForTime(float64 jd, float64 earth_angle, Satellite::TimeStep& time_step);
 
 public:
     struct
@@ -44,18 +50,35 @@ void TleContext::CreateFromEntry(const char* line1, const char* line2)
 }
 
 
-Satellite::TimeStep TleContext::GetTimeStepForTime(double time)
+/**
+ * @brief Converts an SGP4 position (TEME, km) into scene space.
+ */
+static Vec3r TemeToScene(const float64 teme[3], float64 earth_angle)
 {
-    Satellite::TimeStep force {};
+    const float64 c = std::cos(earth_angle);
+    const float64 s = std::sin(earth_angle);
 
-    float64 pos_buffer[4];
-    float64 vel_buffer[4];
-    SGP4Funcs::sgp4(SatRec, time, pos_buffer, vel_buffer);
+    const float64 x = teme[0] * c + teme[1] * s;
+    const float64 y = -teme[0] * s + teme[1] * c;
+    const float64 z = teme[2];
 
-    // Convert the double precision results into our real number type in the vector
-    force.Position = Vec3r(pos_buffer[0], pos_buffer[2], pos_buffer[1]);
+    return Vec3r(float32(x), float32(z), float32(-y)) * scKmToUnits;
+}
 
-    return force;
+bool TleContext::GetTimeStepForTime(float64 jd, float64 earth_angle, Satellite::TimeStep& time_step)
+{
+    // SGP4 takes minutes since the element epoch. The epoch is split into a whole and a fractional day.
+    const float64 tsince = ((jd - SatRec.jdsatepoch) - SatRec.jdsatepochF) * 1440.0;
+
+    float64 teme_pos[3] = {};
+    float64 teme_vel[3] = {};
+
+    if (!SGP4Funcs::sgp4(SatRec, tsince, teme_pos, teme_vel)) {
+        return false;
+    }
+
+    time_step.Position = TemeToScene(teme_pos, earth_angle);
+    return true;
 }
 
 
@@ -131,6 +154,15 @@ uint32 CharToNumber(char ch)
 }
 
 
+/// One element set as read from the file, before it has been propagated
+struct TleEntry
+{
+    std::string Name;
+    std::string Line1;
+    std::string Line2;
+    bool HasName;
+};
+
 void Dataset::LoadFromTLE(const String& tle_path)
 {
     printf("Loading TLE at path %s\n", tle_path.CStr());
@@ -143,13 +175,13 @@ void Dataset::LoadFromTLE(const String& tle_path)
     std::string line1;
     std::string line2;
 
-    constexpr float cScaleMultiplier = 0.00035f;
-
     NumTimesteps = scNumTimeCaptures;
 
     // Read in all of the TLE information
 
     bool no_name_lines = false;
+
+    std::vector<TleEntry> entries;
 
 
     while (true) {
@@ -172,29 +204,68 @@ void Dataset::LoadFromTLE(const String& tle_path)
         }
         std::getline(fb, line2);
 
-        TleContext tle_ctx {};
+        entries.push_back({ no_name_lines ? std::string() : name_line, line1, line2, !no_name_lines });
+    }
 
-        tle_ctx.CreateFromEntry(line1.c_str(), line2.c_str());
+    std::vector<float64> epochs;
+    epochs.reserve(entries.size());
+
+    for (const TleEntry& entry : entries) {
+        TleContext tle_ctx {};
+        tle_ctx.CreateFromEntry(entry.Line1.c_str(), entry.Line2.c_str());
+
+        epochs.push_back(tle_ctx.SatRec.jdsatepoch + tle_ctx.SatRec.jdsatepochF);
+    }
+
+    if (!epochs.empty()) {
+        std::nth_element(epochs.begin(), epochs.begin() + epochs.size() / 2, epochs.end());
+        ReferenceJd = epochs[epochs.size() / 2];
+    }
+
+    // The instant and the Earth's rotation at each time step are shared by every satellite
+    float64 sample_jd[scNumTimeCaptures];
+    float64 sample_angle[scNumTimeCaptures];
+
+    for (uint32 i = 0; i < scNumTimeCaptures; i++) {
+        const float64 minutes = scStartTime + (scTimeJump * i);
+
+        sample_jd[i] = ReferenceJd + (minutes / 1440.0);
+        sample_angle[i] = SGP4Funcs::gstime_SGP4(sample_jd[i]) + scGreenwichSceneAngle;
+    }
+
+    for (const TleEntry& entry : entries) {
+        TleContext tle_ctx {};
+        tle_ctx.CreateFromEntry(entry.Line1.c_str(), entry.Line2.c_str());
 
         Satellite sat;
 
+        char norad_id[6];
+        memcpy(norad_id, entry.Line1.c_str() + 2, 5);
+
+        sat.NoradId = atoi(String(norad_id, 5).CStr());
+        sat.LaunchYear = CharToNumber(entry.Line1[9]) * 10 + CharToNumber(entry.Line1[10]);
+
+        bool propagated = true;
+
         for (uint32 i = 0; i < scNumTimeCaptures; i++) {
-            Satellite::TimeStep time_step = tle_ctx.GetTimeStepForTime(scStartTime + (scTimeJump * i));
-            time_step.Position *= cScaleMultiplier;
+            Satellite::TimeStep time_step {};
+            if (!tle_ctx.GetTimeStepForTime(sample_jd[i], sample_angle[i], time_step)) {
+                propagated = false;
+                break;
+            }
 
             sat.AddTimeStep(time_step);
         }
 
-        if (!no_name_lines) {
-            SetNamesForSatellite(name_line, sat);
+        // SGP4 rejects decayed or invalid element sets. Leave them out rather than place them somewhere wrong.
+        if (!propagated) {
+            printf("Skipping NORAD %u: SGP4 could not propagate it\n", sat.NoradId);
+            continue;
         }
 
-        sat.LaunchYear = CharToNumber(line1[9]) * 10 + CharToNumber(line1[10]);
-
-        char norad_id[6];
-        memcpy(norad_id, line1.c_str() + 2, 5);
-
-        sat.NoradId = atoi(String(norad_id, 5).CStr());
+        if (entry.HasName) {
+            SetNamesForSatellite(entry.Name, sat);
+        }
 
         Satellites.push_back(sat);
     }

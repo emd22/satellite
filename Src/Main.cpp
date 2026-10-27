@@ -52,8 +52,13 @@ static constexpr float32 scZoomSensitivity = 0.06f;
 static constexpr float32 scZoomSmoothing = 12.0f;
 static constexpr float32 scMouseSensitivity = 0.005f;
 
-/// Radius of the rendered Earth model (500 units * 0.004 scale).
-static constexpr float32 scEarthRadius = 2.0f;
+
+static constexpr float32 scEarthModelRadius = 500.0f;
+static constexpr float32 scEarthRadius = float32(scEarthRadiusKm * scKmToUnits);
+
+/// Scale that takes the Earth model to scEarthRadius
+static constexpr float32 scEarthScale = scEarthRadius / scEarthModelRadius;
+
 static constexpr float32 scEarthSurfaceClearance = 0.1f;
 
 static constexpr float32 cPoleLimitOffset = 0.005;
@@ -141,8 +146,8 @@ public:
     void CheckControls();
     void Render();
 
-    void Step(int32 by, bool warp = false);
-    void UpdateTransformations(bool warp_to = false);
+    void Step(int32 by);
+    void UpdateTransformations();
 
     void DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size);
     void UpdateSatellites();
@@ -198,6 +203,8 @@ public:
 
     float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / (300.0f - 10.0f))) * 100.0f; }
 
+    float32 GetLerpFraction() const { return std::min(float32(LerpFrame) / float32(sNumLerpFrames), 1.0f); }
+
     ~Simulation();
 
 
@@ -205,6 +212,9 @@ public:
     Dataset TmpDataset;
 
     uint32 TimeFrameIndex = 0;
+
+    /// Frames of animation since the current time step began
+    uint32 LerpFrame = 0;
 
     rl::Model Earth;
 
@@ -314,16 +324,29 @@ void Simulation::DisplayControlsDefault()
 }
 
 
-void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
+void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, GetLerpFraction()); }
 
 
 Simulation::Simulation() {}
 
 Satellite* Simulation::CheckForSatPicking()
 {
+    if (bHideSatellites) {
+        return nullptr;
+    }
+
     rl::Ray ray = rl::GetScreenToWorldRay(rl::GetMousePosition(), Camera);
 
-    return pFilterInUse->RaycastToSatellite(ray);
+
+    // Satellites behind the Earth are hidden by it, so they can't be picked
+    float32 max_distance = FLT_MAX;
+
+    rl::RayCollision earth_hit = rl::GetRayCollisionSphere(ray, rl::Vector3Zero(), scEarthRadius);
+    if (earth_hit.hit) {
+        max_distance = earth_hit.distance;
+    }
+
+    return pFilterInUse->RaycastToSatellite(ray, max_distance);
 }
 
 rl::Color HSVToRGB(float32 H, float32 S, float32 V)
@@ -395,27 +418,55 @@ void Simulation::SetCameraTarget(const Vec3r& target)
 
 void Simulation::UpdateLerpSpeed(uint32 lerp_frames)
 {
-    sNumLerpFrames = lerp_frames;
+    // Keep the same progress through the current time step, so satellites don't jump when the speed changes
+    const float32 fraction = GetLerpFraction();
 
-    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
-        Satellite& sat = TmpDataset.GetSatellite(i);
-        sat.CalculateMoveSpeed(sNumLerpFrames);
-    }
+    sNumLerpFrames = lerp_frames;
+    LerpFrame = uint32(fraction * float32(sNumLerpFrames));
 }
+
+#ifdef __EMSCRIPTEN__
+/**
+ * @brief Gets the size of the element containing the canvas, so the page decides how big the canvas is.
+ * @returns False if the container has no size yet.
+ */
+static bool GetCanvasContainerSize(int32& width, int32& height)
+{
+    width = EM_ASM_INT({
+        const parent = Module['canvas'].parentElement;
+        return parent ? parent.clientWidth : 0;
+    });
+    height = EM_ASM_INT({
+        const parent = Module['canvas'].parentElement;
+        return parent ? parent.clientHeight : 0;
+    });
+
+    return width > 0 && height > 0;
+}
+#endif
 
 void Simulation::InitGraphics()
 {
 #ifdef __EMSCRIPTEN__
-    // Fill the browser window
-    WindowWidth = EM_ASM_INT(return window.innerWidth;);
-    WindowHeight = EM_ASM_INT(return window.innerHeight;);
+
+    // Fill the canvases container. The resizable flag in Raylib is not used on the web as it always sizes the canvas to
+    // the whole browser window, so Render() follows the container size instead.
+    int32 container_width, container_height;
+    if (GetCanvasContainerSize(container_width, container_height)) {
+        WindowWidth = container_width;
+        WindowHeight = container_height;
+    }
+    else {
+        WindowWidth = 900;
+        WindowHeight = 900;
+    }
 #else
     WindowWidth = 900;
     WindowHeight = 900;
-#endif
-
 
     rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
+#endif
+
     rl::InitWindow(WindowWidth, WindowHeight, "Satellite Visualization");
 
     UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
@@ -432,9 +483,7 @@ void Simulation::InitGraphics()
 
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
-        sat.CalculateMoveSpeed(sNumLerpFrames);
-
-        sat.MoveToTimeStep(0, true);
+        sat.MoveToTimeStep(0);
 
         DefaultFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()));
     }
@@ -446,7 +495,8 @@ void Simulation::InitGraphics()
     SunModel = rl::LoadModel(ASSET_BASE_DIR "/Sun.glb");
 
     SatModel = rl::GenMeshSphere(0.005f, 6.0f, 6.0f);
-    AtmosphereModel = rl::GenMeshSphere(3.0f, 24.0f, 24.0f);
+
+    AtmosphereModel = rl::GenMeshSphere(scEarthRadius * 1.5f, 24.0f, 24.0f);
 
     float ambient_color[4] = { 0.2f, 0.2f, 0.2f, 1.0f };
 
@@ -649,7 +699,7 @@ void Simulation::DeselectSatellites()
         SelectedFilter.bShowDebris = false;
     }
 
-    DefaultFilter.UpdateSatellites({}, false);
+    DefaultFilter.UpdateSatellites({}, GetLerpFraction());
 }
 
 Simulation::~Simulation()
@@ -665,9 +715,9 @@ Simulation::~Simulation()
     rl::CloseWindow();
 }
 
-void Simulation::UpdateTransformations(bool warp_to)
+void Simulation::UpdateTransformations()
 {
-    pFilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), warp_to);
+    pFilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), GetLerpFraction());
 
     // for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
     //     Satellite* sat = FilterInUse->Unselected.Satellites[i];
@@ -686,32 +736,31 @@ void Simulation::UpdateTransformations(bool warp_to)
     // }
 }
 
-void Simulation::Step(int32 by, bool warp)
+void Simulation::Step(int32 by)
 {
     if (int32(TimeFrameIndex) + by < 0) {
         TimeFrameIndex = scNumTimeCaptures - 1;
     }
-    else if (int32(TimeFrameIndex) + by >= scNumTimeCaptures - 1) {
+    else if (int32(TimeFrameIndex) + by >= int32(scNumTimeCaptures)) {
         TimeFrameIndex = 0;
     }
     else {
         TimeFrameIndex += by;
     }
 
-    if (TimeFrameIndex == 0) {
-        warp = true;
-    }
+    // Every step lands exactly on a time step
+    LerpFrame = 0;
 
-    UpdateTransformations(warp);
+    UpdateTransformations();
 }
 
 void Simulation::CheckControls()
 {
     if (rl::IsKeyPressed(rl::KEY_PERIOD)) { // Greater than symbol
-        Step(1, true);
+        Step(1);
     }
     else if (rl::IsKeyPressed(rl::KEY_COMMA)) {
-        Step(-1, true);
+        Step(-1);
     }
 
 
@@ -763,6 +812,15 @@ void Simulation::DrawText(const String& text, int32 cell_x, int32 cell_y, float3
 
 void Simulation::Render()
 {
+#ifdef __EMSCRIPTEN__
+    // Keep the canvas the same size as its container. SetWindowSize resizes the canvas and updates the screen size.
+    int32 container_width, container_height;
+    if (!rl::IsWindowFullscreen() && GetCanvasContainerSize(container_width, container_height) &&
+        (container_width != rl::GetScreenWidth() || container_height != rl::GetScreenHeight())) {
+        rl::SetWindowSize(container_width, container_height);
+    }
+#endif
+
     if (rl::GetScreenWidth() != WindowWidth || rl::GetScreenHeight() != WindowHeight) {
         WindowWidth = rl::GetScreenWidth();
         WindowHeight = rl::GetScreenHeight();
@@ -773,16 +831,19 @@ void Simulation::Render()
     static bool mouse_pressed = false;
 
     if (bAnimateTimeFrames) {
-        UpdateSatellites();
+        ++LerpFrame;
 
-
-        if (pPickedSatellite) {
-            SetCameraTarget(pPickedSatellite->Position);
+        if (LerpFrame >= sNumLerpFrames) {
+            Step(1);
+        }
+        else {
+            UpdateSatellites();
         }
     }
 
-    if (bAnimateTimeFrames && !(FrameCount % sNumLerpFrames)) {
-        Step(1);
+    // Follow the selection whether it moved by animation or by stepping
+    if (pPickedSatellite) {
+        SetCameraTarget(pPickedSatellite->Position);
     }
 
     if (AngleX > M_PI) {
@@ -826,7 +887,7 @@ void Simulation::Render()
     rl::rlEnableBackfaceCulling();
 
 
-    rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
+    rl::Matrix newmat = rl::MatrixScale(scEarthScale, scEarthScale, scEarthScale);
     rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
 
     if (!bHideSatellites) {
@@ -859,7 +920,7 @@ void Simulation::Render()
         ImGui::PopFont();
 
         if (ImGui::Button("<")) {
-            Step(-1, true);
+            Step(-1);
         }
 
         ImGui::SameLine();
@@ -870,7 +931,7 @@ void Simulation::Render()
         ImGui::SameLine();
 
         if (ImGui::Button(">")) {
-            Step(1, true);
+            Step(1);
         }
 
         ImGui::SameLine();
