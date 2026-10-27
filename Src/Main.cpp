@@ -6,7 +6,9 @@
 
 #include "Dataset.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <cfloat>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -46,8 +48,13 @@ static uint32 sNumLerpFrames = 240;
 // Earth 3D model has been taken from the NASA website
 
 
-static constexpr float32 scZoomSensitivity = 10.0f;
+static constexpr float32 scZoomSensitivity = 0.06f;
+static constexpr float32 scZoomSmoothing = 12.0f;
 static constexpr float32 scMouseSensitivity = 0.005f;
+
+/// Radius of the rendered Earth model (500 units * 0.004 scale).
+static constexpr float32 scEarthRadius = 2.0f;
+static constexpr float32 scEarthSurfaceClearance = 0.1f;
 
 static constexpr float32 cPoleLimitOffset = 0.005;
 static constexpr float32 cDefaultZoom = 10.0f;
@@ -167,18 +174,27 @@ public:
         }
     }
 
-    float32 GetZoomPercent() const
+    void GetZoomLimits(float32& min_zoom, float32& max_zoom) const
     {
-        float32 min_zoom = scSelectedMinZoom;
-        float32 max_zoom = scSelectedMaxZoom;
+        min_zoom = scSelectedMinZoom;
+        max_zoom = scSelectedMaxZoom;
 
         if (IsDefaultFilter()) {
             min_zoom = scDefaultMinZoom;
             max_zoom = scDefaultMaxZoom;
         }
+    }
+
+    float32 GetZoomPercent() const
+    {
+        float32 min_zoom, max_zoom;
+        GetZoomLimits(min_zoom, max_zoom);
 
         return 100 - ((Zoom - min_zoom) / (max_zoom - min_zoom)) * 100.0f;
     }
+
+    float32 GetSurfaceZoomLimit() const;
+    void UpdateZoom(float32 delta_time);
 
     float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / (300.0f - 10.0f))) * 100.0f; }
 
@@ -209,6 +225,8 @@ public:
     Vec3r CameraCenter = Vec3r::sZero;
 
     float32 Zoom = cDefaultZoom;
+    /// The zoom that `Zoom` is smoothly moving towards.
+    float32 TargetZoom = Zoom;
     float32 SavedZoom = Zoom;
 
     double SavedAngleX = 0.01;
@@ -570,6 +588,47 @@ void Simulation::SelectSatellite(Satellite* selected)
     SetCameraTarget(selected->Position);
 
     Zoom = cSinglePointZoom;
+    TargetZoom = Zoom;
+}
+
+
+float32 Simulation::GetSurfaceZoomLimit() const
+{
+    const float32 min_radius = scEarthRadius + scEarthSurfaceClearance;
+
+    const Vec3r direction(cosf(AngleX) * sinf(AngleY), cosf(AngleY), sinf(AngleY) * sinf(AngleX));
+
+    const float32 b = CameraCenter.Dot(direction);
+    const float32 c = CameraCenter.Dot(CameraCenter) - (min_radius * min_radius);
+
+    // If the center is inside the clearance sphere (e.g. orbiting the Earth itself) there is nothing to clamp to
+    if (c <= 0.0f) {
+        return FLT_MAX;
+    }
+
+    const float32 discriminant = (b * b) - c;
+
+    // The ray is pointing away from the Earth, or misses it completely
+    if (b >= 0.0f || discriminant <= 0.0f) {
+        return FLT_MAX;
+    }
+
+    return -b - sqrtf(discriminant);
+}
+
+
+void Simulation::UpdateZoom(float32 delta_time)
+{
+    float32 min_zoom, max_zoom;
+    GetZoomLimits(min_zoom, max_zoom);
+
+    TargetZoom = rl::Clamp(TargetZoom, min_zoom, max_zoom);
+
+    Zoom = TargetZoom + (Zoom - TargetZoom) * expf(-scZoomSmoothing * delta_time);
+
+    const float32 surface_limit = GetSurfaceZoomLimit();
+    TargetZoom = std::min(TargetZoom, surface_limit);
+    Zoom = std::min(Zoom, surface_limit);
 }
 
 
@@ -577,6 +636,7 @@ void Simulation::DeselectSatellites()
 {
     SetCameraTarget(Vec3r::sZero);
     Zoom = SavedZoom;
+    TargetZoom = Zoom;
 
     AngleX = SavedAngleX;
     AngleY = SavedAngleY;
@@ -733,6 +793,8 @@ void Simulation::Render()
     }
 
     AngleY = rl::Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
+
+    UpdateZoom(rl::GetFrameTime());
 
     CameraPosition.X = Zoom * cosf(AngleX) * sinf(AngleY);
     CameraPosition.Y = Zoom * cosf(AngleY);
@@ -913,16 +975,7 @@ void Simulation::Render()
     if (!ImGui::IsAnyItemHovered()) {
         float zoom_movement = rl::GetMouseWheelMove();
         if (abs(zoom_movement) > 0.005f) {
-            float32 distance_to_planet = abs((CameraPosition - CameraCenter).Length());
-
-            Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
-
-            if (IsDefaultFilter()) {
-                Zoom = rl::Clamp(Zoom, scDefaultMinZoom, scDefaultMaxZoom);
-            }
-            else {
-                Zoom = rl::Clamp(Zoom, scSelectedMinZoom, scSelectedMaxZoom);
-            }
+            TargetZoom *= expf(zoom_movement * scZoomSensitivity);
         }
 
         if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
