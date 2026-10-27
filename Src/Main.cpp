@@ -975,7 +975,6 @@ void Simulation::Render()
     const bool collapse_ui = WindowWidth < scCollapsedUIWidth;
 
     ImGui::SetNextWindowPos(ImVec2(0, 1), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(300, 500));
     ImGui::SetNextWindowCollapsed(collapse_ui, ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Tools", nullptr, scWindowFlags)) {
@@ -1100,7 +1099,8 @@ void Simulation::Render()
     ImGuiIO& imgui_io = ImGui::GetIO();
 
     if (!ImGui::IsAnyItemHovered()) {
-        float zoom_movement = rl::GetMouseWheelMove();
+        // Only vertical scrolling zooms; GetMouseWheelMove() would also pick up horizontal trackpad swipes
+        float zoom_movement = rl::GetMouseWheelMoveV().y;
         if (abs(zoom_movement) > 0.005f) {
             // Scrolling up (positive) zooms in, which moves the camera closer
             TargetZoom *= expf(-zoom_movement * scZoomSensitivity);
