@@ -88,15 +88,9 @@ LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x720x24" ./build/space
 
 #### Troubleshooting (Linux)
 
-- **Segfault at startup after the shaders load, while loading the Earth
-  model (known issue, tracked in SATE-5).** The code loads
-  `./Earth.glb`, but the file in the repository is `earth.glb`. That works
-  on case-insensitive filesystems (Windows, default macOS) and fails on
-  Linux; the failed load currently crashes the app instead of exiting
-  cleanly. Until SATE-5 lands, the Linux CI headless smoke check is
-  informational only (`continue-on-error: true` in
-  `.github/workflows/linux.yml`). Do not rename assets locally as a
-  workaround in committed changes — the fix belongs to SATE-5.
+- **Asset load warnings:** run from the repository root and keep asset
+  filenames unchanged, including lowercase `earth.glb`. The Linux CI
+  smoke check fails on crashes and raylib `WARNING:` or `ERROR:` lines.
 - **`raylib` not found / FetchContent download fails:** the first
   configure downloads raylib 5.5, so it needs network access. Behind a
   proxy or offline, install raylib 5.5 yourself and point CMake at it

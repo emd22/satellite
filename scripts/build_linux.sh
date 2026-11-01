@@ -28,4 +28,4 @@ echo "Build finished: $build_dir/space"
 echo "Run it from the repository root (assets are loaded relative to the"
 echo "working directory):"
 echo
-echo "  cd \"$repo_root\" && ./$(basename "$build_dir")/space"
+printf '  cd %q && %q\n' "$repo_root" "$build_dir/space"
