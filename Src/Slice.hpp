@@ -22,7 +22,7 @@ public:
 
     Slice(TDataType* ptr, uint32 size) : pData(ptr), Size(size) {}
 
-    Slice(nullptr_t np) : pData(nullptr), Size(0) {}
+    Slice(std::nullptr_t) : pData(nullptr), Size(0) {}
 
     Slice(const Slice& other)
     {
@@ -39,7 +39,7 @@ public:
 
     Slice& operator=(TDataType* value) = delete;
 
-    bool operator==(nullptr_t np) { return pData == nullptr; }
+    bool operator==(std::nullptr_t) { return pData == nullptr; }
 
     operator TDataType*() const { return pData; }
 

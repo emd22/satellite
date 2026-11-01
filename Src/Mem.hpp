@@ -2,6 +2,7 @@
 
 #include "Types.hpp"
 
+#include <cstddef>
 #include <cstdlib>
 
 // Tired of new/free shenanigans, this is kindof a temp fill-in for a memory pool.
@@ -9,13 +10,13 @@
 namespace Mem {
 
 template <typename TType>
-TType* Alloc(uint32 size)
+TType* Alloc(std::size_t size)
 {
     return reinterpret_cast<TType*>(std::malloc(size));
 }
 
 template <typename TType>
-TType* Realloc(TType* ptr, uint32 size)
+TType* Realloc(TType* ptr, std::size_t size)
 {
     return reinterpret_cast<TType*>(std::realloc(ptr, size));
 }

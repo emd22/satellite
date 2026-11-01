@@ -22,7 +22,7 @@ public:
     {
         void UpdateTransforms()
         {
-            for (int i = 0; i < Satellites.size(); i++) {
+            for (std::size_t i = 0; i < Satellites.size(); i++) {
                 Satellite* sat = Satellites[i];
                 if (!sat) {
                     continue;
@@ -49,7 +49,7 @@ public:
 
         void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction)
         {
-            for (int i = 0; i < Size(); i++) {
+            for (uint32 i = 0; i < Size(); i++) {
                 Satellite* sat = Satellites[i];
                 if (use_timestep.has_value()) {
                     sat->MoveToTimeStep(use_timestep.value());
@@ -105,11 +105,11 @@ public:
 public:
     virtual void Finalize() {}
 
-    virtual void UpdateSatellites(std::optional<uint32> use_timestep, float32 fraction) {}
+    virtual void UpdateSatellites(std::optional<uint32>, float32) {}
     virtual void MoveSatellitesToTimeStep() {}
-    virtual void RenderSatellites(const rl::Mesh& sat_model, rl::Material& material) {}
+    virtual void RenderSatellites(const rl::Mesh&, rl::Material&) {}
     /// Returns the nearest visible satellite on the ray, ignoring anything at or beyond `max_distance`
-    virtual Satellite* RaycastToSatellite(const rl::Ray& ray, float32 max_distance) { return nullptr; }
+    virtual Satellite* RaycastToSatellite(const rl::Ray&, float32) { return nullptr; }
     virtual uint32 GetSatelliteCount() const { return 0; }
 
 public:
@@ -192,7 +192,7 @@ public:
 
             rl::BeginBlendMode(rl::BLEND_ADDITIVE);
             // rl::DrawMeshInstanced(sat_model, material, &matrix, 1);
-            rl::Color picked_color = rl::ColorAlpha(rl::Color(150, 0, 0), 255);
+            rl::Color picked_color = rl::ColorAlpha(rl::Color(150, 0, 0, 0), 255);
             Render::DrawMeshInstanced_Colors(sat_model, material, &matrix, &picked_color, 1);
 
             rl::EndBlendMode();
@@ -284,7 +284,7 @@ public:
         }
     }
 
-    void Finalize(const rl::Mesh& sat_model, rl::Shader shader)
+    void Finalize() override
     {
         Sats.Finalize();
         Debris.Finalize();

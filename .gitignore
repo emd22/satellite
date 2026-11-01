@@ -1,6 +1,10 @@
 build
 build/**/*
+build-clang
+build-clang/**/*
 build-web
+build-*
+build-*/**/*
 compile_commands.json
 *.bin
 
@@ -37,5 +41,9 @@ space
 # exclusions
 !.gitignore
 !.clang*
+# The catch-all ".*" above would otherwise ignore .github/ (CI workflows).
+!.github/
+!.github/workflows/
+!.github/workflows/**
 
 copy_to_website.sh

@@ -157,8 +157,8 @@ public:
     FORCE_INLINE Vec3r SmoothInterpolate(const Vec3r& dest, const float speed, const float delta_time) const
     {
         Vec3r x = *this;
-        x.LerpIP(dest, 1.0f - std::expf(-speed * delta_time));
-        // *this = SLerp(dest, 1.0 - std::expf(-speed * delta_time));
+        x.LerpIP(dest, 1.0f - std::exp(-speed * delta_time));
+        // *this = SLerp(dest, 1.0 - std::exp(-speed * delta_time));
         return x;
     }
 

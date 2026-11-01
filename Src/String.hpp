@@ -51,7 +51,7 @@ public:
     String operator+(const String& other) const;
     String operator+(const char* other) const;
 
-    const char operator[](size_t index) const;
+    char operator[](size_t index) const;
     char& operator[](size_t index);
 
 

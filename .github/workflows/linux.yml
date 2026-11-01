@@ -1,0 +1,100 @@
+name: Linux CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: linux-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build space (ubuntu-24.04, ${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            clang \
+            cmake \
+            git \
+            pkg-config \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            wayland-protocols \
+            xvfb \
+            mesa-utils
+
+      # Reuse the FetchContent raylib 5.5 download/build between runs.
+      # Bump or drop the hashFiles part when the CMakeLists raylib pin changes.
+      - name: Cache raylib (FetchContent)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: raylib-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: |
+            raylib-fetchcontent-${{ runner.os }}-${{ matrix.compiler }}-
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Verify binary
+        run: |
+          test -x build/space
+          file build/space
+
+      # Headless smoke check: launch space for 20s under xvfb with software GL
+      # (llvmpipe). Exit 0 (clean exit) or 124 (timeout kill = survived the
+      # whole window) are both pass; any other code or raylib WARNING/ERROR is
+      # a failure.
+      - name: Smoke check (headless launch)
+        run: |
+          set +e
+          LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -s "-screen 0 1280x720x24" \
+            timeout --signal=TERM --kill-after=10 20 ./build/space \
+            > space_smoke.log 2>&1
+          code=$?
+          set -e
+          cat space_smoke.log
+          if [ "$code" -ne 0 ] && [ "$code" -ne 124 ]; then
+            echo "::error::space exited with code $code during the headless smoke check."
+            exit 1
+          fi
+          if grep -E "^(WARNING|ERROR):" space_smoke.log; then
+            echo "::error::raylib emitted warnings or errors during the headless smoke check."
+            exit 1
+          fi
+          echo "Headless smoke check OK (exit $code: app ran or survived the full 20s window)."

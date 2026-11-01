@@ -4,6 +4,8 @@
 #include "Mem.hpp"
 #include "Slice.hpp"
 
+#include <cstring>
+
 String String::NoCopy(char* ptr, uint32 length)
 {
     String result;
@@ -113,7 +115,7 @@ String& String::operator=(const char* str)
 }
 
 
-const char String::operator[](size_t index) const { return CStr()[index]; }
+char String::operator[](size_t index) const { return CStr()[index]; }
 char& String::operator[](size_t index) { return GetInternalPtr()[index]; }
 
 String::~String()

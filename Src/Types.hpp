@@ -16,8 +16,10 @@ using float32 = float;
 using float64 = double;
 
 
-#ifdef _WIN64
+#if defined(_MSC_VER)
 #define FORCE_INLINE __forceinline
-#else
+#elif defined(__GNUC__) || defined(__clang__)
 #define FORCE_INLINE inline __attribute__((always_inline))
+#else
+#define FORCE_INLINE inline
 #endif
