@@ -1,5 +1,7 @@
 # Satellite Visualization
 
+![Satellite Visualization showing 30,269 tracked satellites and debris around Earth](docs/screenshot.png)
+
 ## Description
 
 
