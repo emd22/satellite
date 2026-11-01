@@ -28,5 +28,8 @@ public:
     String Name = "Unknown";
     uint32 NumTimesteps = 0;
 
+    /// Julian date (UT) that every satellite is propagated to. Time step 0 is this instant plus scStartTime.
+    float64 ReferenceJd = 0.0;
+
     std::vector<Satellite> Satellites;
 };

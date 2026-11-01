@@ -3,6 +3,7 @@
 #include "String.hpp"
 #include "Vec3.hpp"
 
+#include <algorithm>
 #include <vector>
 
 struct Satellite
@@ -19,17 +20,17 @@ public:
     void AddTimeStep(const TimeStep& ts) { TimeSteps.push_back(ts); }
     const TimeStep& GetTimeStep(uint32 time_step) const { return TimeSteps[time_step % TimeSteps.size()]; }
 
-    const Vec3r& MoveToTimeStep(uint32 time_step, bool warp_to = false)
+    /**
+     * @brief Places the satellite at a time step, ready to interpolate towards the next one.
+     * The last time step has no successor, so the satellite holds still there instead of heading back to the first.
+     */
+    const Vec3r& MoveToTimeStep(uint32 time_step)
     {
-        Position = GoalPosition;
+        const uint32 last_step = uint32(TimeSteps.size()) - 1;
 
-        GoalPosition = GetTimeStep(time_step + 1).Position;
-
-        if (warp_to) {
-            Position = GetTimeStep(time_step).Position;
-        }
-
-        Movement = (GoalPosition - Position) / LerpFrames;
+        StartPosition = TimeSteps[std::min(time_step, last_step)].Position;
+        GoalPosition = TimeSteps[std::min(time_step + 1, last_step)].Position;
+        Position = StartPosition;
 
         return Position;
     }
@@ -41,9 +42,7 @@ public:
         return Series.GetHash() == scDebrisHash;
     }
 
-    void UpdatePosition() { Position += Movement; }
-
-    void CalculateMoveSpeed(uint32 lerp_frames) { LerpFrames = lerp_frames; }
+    void UpdatePosition(float32 fraction) { Position = StartPosition + (GoalPosition - StartPosition) * fraction; }
 
 public:
     String Name;
@@ -53,12 +52,10 @@ public:
 
     uint32 FrameStart = 0;
     Vec3r Position = Vec3r::sZero;
+    Vec3r StartPosition = Vec3r::sZero;
     Vec3r GoalPosition = Vec3r::sZero;
-    Vec3r Movement = Vec3r::sZero;
 
     uint16 LaunchYear = 0;
-
-    uint32 LerpFrames = 10;
 
     std::vector<TimeStep> TimeSteps;
 };

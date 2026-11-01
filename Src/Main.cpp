@@ -6,9 +6,12 @@
 
 #include "Dataset.hpp"
 
+#include <algorithm>
 #include <cassert>
+#include <cfloat>
 #include <cstdlib>
 #include <cmath>
+#include <cstring>
 #include <unordered_map>
 
 namespace rl {
@@ -35,6 +38,10 @@ namespace rl {
 
 #include "ThirdParty/imgui/imgui.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 /// The number of frames it takes for a satellite to reach its destination.
 static uint32 sNumLerpFrames = 240;
 
@@ -42,8 +49,18 @@ static uint32 sNumLerpFrames = 240;
 // Earth 3D model has been taken from the NASA website
 
 
-static constexpr float32 scZoomSensitivity = 10.0f;
+static constexpr float32 scZoomSensitivity = 0.06f;
+static constexpr float32 scZoomSmoothing = 12.0f;
 static constexpr float32 scMouseSensitivity = 0.005f;
+
+
+static constexpr float32 scEarthModelRadius = 500.0f;
+static constexpr float32 scEarthRadius = float32(scEarthRadiusKm * scKmToUnits);
+
+/// Scale that takes the Earth model to scEarthRadius
+static constexpr float32 scEarthScale = scEarthRadius / scEarthModelRadius;
+
+static constexpr float32 scEarthSurfaceClearance = 0.1f;
 
 static constexpr float32 cPoleLimitOffset = 0.005;
 static constexpr float32 cDefaultZoom = 10.0f;
@@ -55,6 +72,10 @@ static constexpr float32 scUIPaddingVertical = 10;
 static constexpr float32 scUIGridHorizontalSplits = 24;
 static constexpr float32 scUIGridVerticalSplits = 32;
 
+static constexpr float32 scUIDesignSize = 900.0f;
+static constexpr float32 scMinUIScale = 0.65f;
+static constexpr uint32 scCollapsedUIWidth = 600;
+
 static constexpr float32 scDefaultMinZoom = 3.85f;
 static constexpr float32 scDefaultMaxZoom = 45.0f;
 
@@ -62,6 +83,62 @@ static constexpr float32 scSelectedMinZoom = 1.0f;
 static constexpr float32 scSelectedMaxZoom = 4.5f;
 
 const Vec3r Vec3r::sZero = Vec3r(0.0, 0.0, 0.0);
+
+
+/**
+ * @brief Loads a shader from disk given the vertex and pixel shader paths.
+ * NOTE: The version header is modified for web builds
+ */
+static rl::Shader LoadShaderPortable(const char* vs_path, const char* fs_path)
+{
+#if defined(__EMSCRIPTEN__)
+    auto LoadShaderSource = [](const char* path) -> char*
+    {
+        if (!path) {
+            return nullptr;
+        }
+
+        char* source = rl::LoadFileText(path);
+        if (!source) {
+            return nullptr;
+        }
+
+        static constexpr char scDesktopHeader[] = "#version 330";
+        static constexpr char scWebHeader[] = "#version 300 es\nprecision highp float;\nprecision highp int;";
+
+        char* version_start = strstr(source, scDesktopHeader);
+        if (!version_start) {
+            return source;
+        }
+
+        const char* rest = version_start + strlen(scDesktopHeader);
+
+        size_t prefix_len = version_start - source;
+        size_t total = prefix_len + strlen(scWebHeader) + strlen(rest) + 1;
+
+        char* patched = static_cast<char*>(malloc(total));
+        memcpy(patched, source, prefix_len);
+        strcpy(patched + prefix_len, scWebHeader);
+        strcat(patched, rest);
+
+        rl::UnloadFileText(source);
+
+        return patched;
+    };
+
+    char* vs_source = LoadShaderSource(vs_path);
+    char* fs_source = LoadShaderSource(fs_path);
+
+    rl::Shader shader = rl::LoadShaderFromMemory(vs_source, fs_source);
+
+    free(vs_source);
+    free(fs_source);
+
+    return shader;
+#else
+    return rl::LoadShader(vs_path, fs_path);
+#endif
+}
 
 
 class Simulation
@@ -74,8 +151,8 @@ public:
     void CheckControls();
     void Render();
 
-    void Step(int32 by, bool warp = false);
-    void UpdateTransformations(bool warp_to = false);
+    void Step(int32 by);
+    void UpdateTransformations();
 
     void DrawText(const String& text, int32 cell_x, int32 cell_y, float32 size);
     void UpdateSatellites();
@@ -107,20 +184,32 @@ public:
         }
     }
 
-    float32 GetZoomPercent() const
+    void GetZoomLimits(float32& min_zoom, float32& max_zoom) const
     {
-        float32 min_zoom = scSelectedMinZoom;
-        float32 max_zoom = scSelectedMaxZoom;
+        min_zoom = scSelectedMinZoom;
+        max_zoom = scSelectedMaxZoom;
 
         if (IsDefaultFilter()) {
             min_zoom = scDefaultMinZoom;
             max_zoom = scDefaultMaxZoom;
         }
+    }
+
+    float32 GetZoomPercent() const
+    {
+        float32 min_zoom, max_zoom;
+        GetZoomLimits(min_zoom, max_zoom);
 
         return 100 - ((Zoom - min_zoom) / (max_zoom - min_zoom)) * 100.0f;
     }
 
+    float32 GetSurfaceZoomLimit() const;
+    void UpdateZoom(float32 delta_time);
+    void UpdateUIScale();
+
     float32 GetSpeedPercent() const { return (1.0f - (float32(sNumLerpFrames - 10) / (300.0f - 10.0f))) * 100.0f; }
+
+    float32 GetLerpFraction() const { return std::min(float32(LerpFrame) / float32(sNumLerpFrames), 1.0f); }
 
     ~Simulation();
 
@@ -129,6 +218,9 @@ public:
     Dataset TmpDataset;
 
     uint32 TimeFrameIndex = 0;
+
+    /// Frames of animation since the current time step began
+    uint32 LerpFrame = 0;
 
     rl::Model Earth;
 
@@ -149,6 +241,8 @@ public:
     Vec3r CameraCenter = Vec3r::sZero;
 
     float32 Zoom = cDefaultZoom;
+    /// The zoom that `Zoom` is smoothly moving towards.
+    float32 TargetZoom = Zoom;
     float32 SavedZoom = Zoom;
 
     double SavedAngleX = 0.01;
@@ -159,6 +253,12 @@ public:
 
     float32 UICellSizeX = 1.0f;
     float32 UICellSizeY = 1.0f;
+
+    float32 UIScale = 1.0f;
+    ImGuiStyle BaseUIStyle;
+
+    float32 PrevPinchDistance = 0.0f;
+    bool bInTouchGesture = false;
 
     uint32 NoradIdQuery = 0;
 
@@ -236,16 +336,29 @@ void Simulation::DisplayControlsDefault()
 }
 
 
-void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, false); }
+void Simulation::UpdateSatellites() { pFilterInUse->UpdateSatellites({}, GetLerpFraction()); }
 
 
 Simulation::Simulation() {}
 
 Satellite* Simulation::CheckForSatPicking()
 {
+    if (bHideSatellites) {
+        return nullptr;
+    }
+
     rl::Ray ray = rl::GetScreenToWorldRay(rl::GetMousePosition(), Camera);
 
-    return pFilterInUse->RaycastToSatellite(ray);
+
+    // Satellites behind the Earth are hidden by it, so they can't be picked
+    float32 max_distance = FLT_MAX;
+
+    rl::RayCollision earth_hit = rl::GetRayCollisionSphere(ray, rl::Vector3Zero(), scEarthRadius);
+    if (earth_hit.hit) {
+        max_distance = earth_hit.distance;
+    }
+
+    return pFilterInUse->RaycastToSatellite(ray, max_distance);
 }
 
 rl::Color HSVToRGB(float32 H, float32 S, float32 V)
@@ -317,21 +430,85 @@ void Simulation::SetCameraTarget(const Vec3r& target)
 
 void Simulation::UpdateLerpSpeed(uint32 lerp_frames)
 {
-    sNumLerpFrames = lerp_frames;
+    // Keep the same progress through the current time step, so satellites don't jump when the speed changes
+    const float32 fraction = GetLerpFraction();
 
-    for (uint32 i = 0; i < TmpDataset.Size(); i++) {
-        Satellite& sat = TmpDataset.GetSatellite(i);
-        sat.CalculateMoveSpeed(sNumLerpFrames);
-    }
+    sNumLerpFrames = lerp_frames;
+    LerpFrame = uint32(fraction * float32(sNumLerpFrames));
+}
+
+#ifdef __EMSCRIPTEN__
+/**
+ * @brief Gets the size of the element containing the canvas, so the page decides how big the canvas is.
+ * @returns False if the container has no size yet.
+ */
+static bool GetCanvasContainerSize(int32& width, int32& height)
+{
+    width = EM_ASM_INT({
+        const parent = Module['canvas'].parentElement;
+        return parent ? parent.clientWidth : 0;
+    });
+    height = EM_ASM_INT({
+        const parent = Module['canvas'].parentElement;
+        return parent ? parent.clientHeight : 0;
+    });
+
+    return width > 0 && height > 0;
+}
+
+/**
+ * @brief Tracks the number of fingers on the screen, read by GetActiveTouchCount().
+ */
+static void InstallTouchCounter()
+{
+    EM_ASM({
+        const canvas = Module['canvas'];
+        Module['activeTouches'] = 0;
+        const update = (event) => { Module['activeTouches'] = event.touches.length; };
+        for (const type of['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+            canvas.addEventListener(type, update);
+        }
+    });
+}
+#endif
+
+/**
+ * @brief Gets the number of fingers on the screen. On the web Raylib's count gets stuck at 1 when several fingers are
+ * lifted at once, so we can just use the browser's touch count instead.
+ */
+static int32 GetActiveTouchCount()
+{
+#ifdef __EMSCRIPTEN__
+    return EM_ASM_INT({ return Module['activeTouches'] | 0; });
+#else
+    return rl::GetTouchPointCount();
+#endif
 }
 
 void Simulation::InitGraphics()
 {
+#ifdef __EMSCRIPTEN__
+
+    // Fill the canvases container. The resizable flag in Raylib is not used on the web as it always sizes the canvas to
+    // the whole browser window, so Render() follows the container size instead.
+    int32 container_width, container_height;
+    if (GetCanvasContainerSize(container_width, container_height)) {
+        WindowWidth = container_width;
+        WindowHeight = container_height;
+    }
+    else {
+        WindowWidth = 900;
+        WindowHeight = 900;
+    }
+
+    InstallTouchCounter();
+#else
     WindowWidth = 900;
     WindowHeight = 900;
 
-
     rl::SetConfigFlags(rl::FLAG_WINDOW_RESIZABLE);
+#endif
+
     rl::InitWindow(WindowWidth, WindowHeight, "Satellite Visualization");
 
     UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
@@ -348,9 +525,7 @@ void Simulation::InitGraphics()
 
     for (uint32 i = 0; i < TmpDataset.Size(); i++) {
         Satellite& sat = TmpDataset.GetSatellite(i);
-        sat.CalculateMoveSpeed(sNumLerpFrames);
-
-        sat.MoveToTimeStep(0, true);
+        sat.MoveToTimeStep(0);
 
         DefaultFilter.AddSatellite(sat, GetSatColor(sat.Series.GetHash()));
     }
@@ -362,14 +537,15 @@ void Simulation::InitGraphics()
     SunModel = rl::LoadModel(ASSET_BASE_DIR "/Sun.glb");
 
     SatModel = rl::GenMeshSphere(0.005f, 6.0f, 6.0f);
-    AtmosphereModel = rl::GenMeshSphere(3.0f, 24.0f, 24.0f);
+
+    AtmosphereModel = rl::GenMeshSphere(scEarthRadius * 1.5f, 24.0f, 24.0f);
 
     float ambient_color[4] = { 0.2f, 0.2f, 0.2f, 1.0f };
 
 
     { // Load Atmosphere shader
-        AtmosphereShader = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
-                                          ASSET_BASE_DIR "/Shaders/Atmosphere.fs");
+        AtmosphereShader = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
+                                              ASSET_BASE_DIR "/Shaders/Atmosphere.fs");
         // Get shader locations
         AtmosphereShader.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(AtmosphereShader, "mvp");
         AtmosphereShader.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(AtmosphereShader, "viewPos");
@@ -386,7 +562,7 @@ void Simulation::InitGraphics()
     }
 
     { // Load lighting shader
-        SatLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", nullptr);
+        SatLit = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingInstanced.vs", nullptr);
         // Get shader locations
         SatLit.locs[rl::SHADER_LOC_MATRIX_MVP] = GetShaderLocation(SatLit, "mvp");
         SatLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = GetShaderLocation(SatLit, "viewPos");
@@ -404,7 +580,8 @@ void Simulation::InitGraphics()
 
 
     { // Load lighting shader
-        EarthLit = rl::LoadShader(ASSET_BASE_DIR "/Shaders/LightingDefault.vs", ASSET_BASE_DIR "/Shaders/Lighting.fs");
+        EarthLit = LoadShaderPortable(ASSET_BASE_DIR "/Shaders/LightingDefault.vs",
+                                      ASSET_BASE_DIR "/Shaders/Lighting.fs");
         // Get shader locations
         EarthLit.locs[rl::SHADER_LOC_MATRIX_MVP] = rl::GetShaderLocation(EarthLit, "mvp");
         EarthLit.locs[rl::SHADER_LOC_VECTOR_VIEW] = rl::GetShaderLocation(EarthLit, "viewPos");
@@ -447,7 +624,10 @@ void Simulation::InitGraphics()
     Camera.projection = rl::CAMERA_PERSPECTIVE;
     rl::rlSetClipPlanes(0.05f, 2000.0f);
 
+#ifndef __EMSCRIPTEN__
+    // On the web the browser paces frames with requestAnimationFrame
     rl::SetTargetFPS(120);
+#endif
     rl::SetExitKey(rl::KEY_NULL);
 
     rl::rlImGuiSetup(true);
@@ -459,6 +639,9 @@ void Simulation::InitGraphics()
 
     FontNormal = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 16.0f);
     FontLarge = io.Fonts->AddFontFromFileTTF(ASSET_BASE_DIR "/font.ttf", 32.0f);
+
+    BaseUIStyle = ImGui::GetStyle();
+    UpdateUIScale();
 }
 
 
@@ -501,6 +684,63 @@ void Simulation::SelectSatellite(Satellite* selected)
     SetCameraTarget(selected->Position);
 
     Zoom = cSinglePointZoom;
+    TargetZoom = Zoom;
+}
+
+
+float32 Simulation::GetSurfaceZoomLimit() const
+{
+    const float32 min_radius = scEarthRadius + scEarthSurfaceClearance;
+
+    const Vec3r direction(cosf(AngleX) * sinf(AngleY), cosf(AngleY), sinf(AngleY) * sinf(AngleX));
+
+    const float32 b = CameraCenter.Dot(direction);
+    const float32 c = CameraCenter.Dot(CameraCenter) - (min_radius * min_radius);
+
+    // If the center is inside the clearance sphere (e.g. orbiting the Earth itself) there is nothing to clamp to
+    if (c <= 0.0f) {
+        return FLT_MAX;
+    }
+
+    const float32 discriminant = (b * b) - c;
+
+    // The ray is pointing away from the Earth, or misses it completely
+    if (b >= 0.0f || discriminant <= 0.0f) {
+        return FLT_MAX;
+    }
+
+    return -b - sqrtf(discriminant);
+}
+
+
+void Simulation::UpdateZoom(float32 delta_time)
+{
+    float32 min_zoom, max_zoom;
+    GetZoomLimits(min_zoom, max_zoom);
+
+    TargetZoom = rl::Clamp(TargetZoom, min_zoom, max_zoom);
+
+    Zoom = TargetZoom + (Zoom - TargetZoom) * expf(-scZoomSmoothing * delta_time);
+
+    const float32 surface_limit = GetSurfaceZoomLimit();
+    TargetZoom = std::min(TargetZoom, surface_limit);
+    Zoom = std::min(Zoom, surface_limit);
+}
+
+
+void Simulation::UpdateUIScale()
+{
+    const float32 scale = std::clamp(float32(std::min(WindowWidth, WindowHeight)) / scUIDesignSize, scMinUIScale, 1.0f);
+    if (scale == UIScale) {
+        return;
+    }
+
+    UIScale = scale;
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = BaseUIStyle;
+    style.ScaleAllSizes(scale);
+    style.FontScaleMain = scale;
 }
 
 
@@ -508,6 +748,7 @@ void Simulation::DeselectSatellites()
 {
     SetCameraTarget(Vec3r::sZero);
     Zoom = SavedZoom;
+    TargetZoom = Zoom;
 
     AngleX = SavedAngleX;
     AngleY = SavedAngleY;
@@ -520,7 +761,7 @@ void Simulation::DeselectSatellites()
         SelectedFilter.bShowDebris = false;
     }
 
-    DefaultFilter.UpdateSatellites({}, false);
+    DefaultFilter.UpdateSatellites({}, GetLerpFraction());
 }
 
 Simulation::~Simulation()
@@ -536,9 +777,9 @@ Simulation::~Simulation()
     rl::CloseWindow();
 }
 
-void Simulation::UpdateTransformations(bool warp_to)
+void Simulation::UpdateTransformations()
 {
-    pFilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), warp_to);
+    pFilterInUse->UpdateSatellites(std::make_optional(TimeFrameIndex), GetLerpFraction());
 
     // for (int i = 0; i < FilterInUse->Unselected.Size(); i++) {
     //     Satellite* sat = FilterInUse->Unselected.Satellites[i];
@@ -557,32 +798,31 @@ void Simulation::UpdateTransformations(bool warp_to)
     // }
 }
 
-void Simulation::Step(int32 by, bool warp)
+void Simulation::Step(int32 by)
 {
     if (int64(TimeFrameIndex) + by < 0) {
         TimeFrameIndex = scNumTimeCaptures - 1;
     }
-    else if (int64(TimeFrameIndex) + by >= int64(scNumTimeCaptures) - 1) {
+    else if (int64(TimeFrameIndex) + by >= int64(scNumTimeCaptures)) {
         TimeFrameIndex = 0;
     }
     else {
         TimeFrameIndex += by;
     }
 
-    if (TimeFrameIndex == 0) {
-        warp = true;
-    }
+    // Every step lands exactly on a time step
+    LerpFrame = 0;
 
-    UpdateTransformations(warp);
+    UpdateTransformations();
 }
 
 void Simulation::CheckControls()
 {
     if (rl::IsKeyPressed(rl::KEY_PERIOD)) { // Greater than symbol
-        Step(1, true);
+        Step(1);
     }
     else if (rl::IsKeyPressed(rl::KEY_COMMA)) {
-        Step(-1, true);
+        Step(-1);
     }
 
 
@@ -634,26 +874,40 @@ void Simulation::DrawText(const String&, int32, int32, float32)
 
 void Simulation::Render()
 {
+#ifdef __EMSCRIPTEN__
+    // Keep the canvas the same size as its container. SetWindowSize resizes the canvas and updates the screen size.
+    int32 container_width, container_height;
+    if (!rl::IsWindowFullscreen() && GetCanvasContainerSize(container_width, container_height) &&
+        (container_width != rl::GetScreenWidth() || container_height != rl::GetScreenHeight())) {
+        rl::SetWindowSize(container_width, container_height);
+    }
+#endif
+
     if (uint32(rl::GetScreenWidth()) != WindowWidth || uint32(rl::GetScreenHeight()) != WindowHeight) {
         WindowWidth = rl::GetScreenWidth();
         WindowHeight = rl::GetScreenHeight();
         UICellSizeX = (float32(WindowWidth) - scUIPaddingHorizontal) / scUIGridHorizontalSplits;
         UICellSizeY = (float32(WindowHeight) - scUIPaddingVertical) / scUIGridVerticalSplits;
+
+        UpdateUIScale();
     }
 
     static bool mouse_pressed = false;
 
     if (bAnimateTimeFrames) {
-        UpdateSatellites();
+        ++LerpFrame;
 
-
-        if (pPickedSatellite) {
-            SetCameraTarget(pPickedSatellite->Position);
+        if (LerpFrame >= sNumLerpFrames) {
+            Step(1);
+        }
+        else {
+            UpdateSatellites();
         }
     }
 
-    if (bAnimateTimeFrames && !(FrameCount % sNumLerpFrames)) {
-        Step(1);
+    // Follow the selection whether it moved by animation or by stepping
+    if (pPickedSatellite) {
+        SetCameraTarget(pPickedSatellite->Position);
     }
 
     if (AngleX > M_PI) {
@@ -664,6 +918,8 @@ void Simulation::Render()
     }
 
     AngleY = rl::Clamp(AngleY, -M_PI + cPoleLimitOffset, -cPoleLimitOffset);
+
+    UpdateZoom(rl::GetFrameTime());
 
     CameraPosition.X = Zoom * cosf(AngleX) * sinf(AngleY);
     CameraPosition.Y = Zoom * cosf(AngleY);
@@ -695,7 +951,7 @@ void Simulation::Render()
     rl::rlEnableBackfaceCulling();
 
 
-    rl::Matrix newmat = rl::MatrixScale(0.0040, 0.0040, 0.0040);
+    rl::Matrix newmat = rl::MatrixScale(scEarthScale, scEarthScale, scEarthScale);
     if (Earth.meshCount > 0) {
         rl::DrawMeshInstanced(Earth.meshes[0], EarthMaterial, &newmat, 1);
     }
@@ -718,7 +974,11 @@ void Simulation::Render()
     static constexpr ImGuiWindowFlags scWindowFlags = ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoResize |
                                                       ImGuiWindowFlags_AlwaysAutoResize;
 
-    ImGui::SetNextWindowSize(ImVec2(300, 500));
+    // Default layout for when there is no imgui.ini (e.g. on the web)
+    const bool collapse_ui = WindowWidth < scCollapsedUIWidth;
+
+    ImGui::SetNextWindowPos(ImVec2(0, 1), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowCollapsed(collapse_ui, ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("Tools", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
@@ -727,7 +987,7 @@ void Simulation::Render()
         ImGui::PopFont();
 
         if (ImGui::Button("<")) {
-            Step(-1, true);
+            Step(-1);
         }
 
         ImGui::SameLine();
@@ -738,7 +998,7 @@ void Simulation::Render()
         ImGui::SameLine();
 
         if (ImGui::Button(">")) {
-            Step(1, true);
+            Step(1);
         }
 
         ImGui::SameLine();
@@ -787,7 +1047,9 @@ void Simulation::Render()
     ImGui::End();
 
 
+    ImGui::SetNextWindowPos(ImVec2(float32(WindowWidth) - 304.0f * UIScale, 1), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(300, 350));
+    ImGui::SetNextWindowCollapsed(collapse_ui, ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Detail", nullptr, scWindowFlags)) {
         ImGui::PushFont(FontNormal);
 
@@ -833,26 +1095,41 @@ void Simulation::Render()
 
     rl::rlImGuiEnd();
 
-
-    rl::EndDrawing();
-
+    // NOTE: Input is handled before EndDrawing(), as that is where Raylib advances its input state. On the web,
+    // events arrive between frames, so any presses/scrolls would already be cleared after EndDrawing().
+    ImGuiIO& imgui_io = ImGui::GetIO();
 
     if (!ImGui::IsAnyItemHovered()) {
-        float zoom_movement = rl::GetMouseWheelMove();
+        // Only vertical scrolling zooms; GetMouseWheelMove() would also pick up horizontal trackpad swipes
+        float zoom_movement = rl::GetMouseWheelMoveV().y;
         if (std::abs(zoom_movement) > 0.005f) {
-            float32 distance_to_planet = std::abs((CameraPosition - CameraCenter).Length());
+            // Scrolling up (positive) zooms in, which moves the camera closer
+            TargetZoom *= expf(-zoom_movement * scZoomSensitivity);
+        }
 
-            Zoom += zoom_movement * ((scZoomSensitivity * distance_to_planet)) * rl::GetFrameTime();
 
-            if (IsDefaultFilter()) {
-                Zoom = rl::Clamp(Zoom, scDefaultMinZoom, scDefaultMaxZoom);
+        const int32 touch_count = GetActiveTouchCount();
+        if (touch_count >= 2) {
+            const float32 pinch_distance = rl::Vector2Distance(rl::GetTouchPosition(0), rl::GetTouchPosition(1));
+            if (PrevPinchDistance > 0.0f && pinch_distance > 0.0f) {
+                TargetZoom *= PrevPinchDistance / pinch_distance;
             }
-            else {
-                Zoom = rl::Clamp(Zoom, scSelectedMinZoom, scSelectedMaxZoom);
+
+            PrevPinchDistance = pinch_distance;
+            bInTouchGesture = true;
+            mouse_pressed = false;
+        }
+        else {
+            PrevPinchDistance = 0.0f;
+
+            if (touch_count == 0) {
+                bInTouchGesture = false;
             }
         }
 
-        if (rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON)) {
+        // The press frame is skipped as a new touch moves the mouse position from wherever the last touch ended
+        if (!bInTouchGesture && rl::IsMouseButtonDown(rl::MOUSE_LEFT_BUTTON) &&
+            !rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
             rl::Vector2 mouse_delta = rl::GetMouseDelta();
 
             float32 move_magnitude = std::abs(rl::Vector2Length(mouse_delta));
@@ -864,7 +1141,7 @@ void Simulation::Render()
             }
         }
 
-        if (rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
+        if (!bInTouchGesture && rl::IsMouseButtonPressed(rl::MOUSE_LEFT_BUTTON)) {
             mouse_pressed = true;
         }
 
@@ -879,6 +1156,9 @@ void Simulation::Render()
             mouse_pressed = false;
         }
     }
+
+
+    rl::EndDrawing();
 
 
     ++FrameCount;
@@ -910,11 +1190,22 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char* argv[])
 
     sim.InitGraphics();
 
-
+#ifdef __EMSCRIPTEN__
+    // The browser owns the main loop, so hand each frame off to it. This call does not return.
+    emscripten_set_main_loop_arg(
+        [](void* arg)
+        {
+            Simulation* sim = static_cast<Simulation*>(arg);
+            sim->CheckControls();
+            sim->Render();
+        },
+        &sim, 0, true);
+#else
     while (!rl::WindowShouldClose()) {
         sim.CheckControls();
         sim.Render();
     }
+#endif
 
 
     return 0;
